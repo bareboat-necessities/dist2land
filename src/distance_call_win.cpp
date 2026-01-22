@@ -1,99 +1,108 @@
 #include "distance_iface.h"
-#include "win_runtime.h"
 
 #ifdef _WIN32
-  #define NOMINMAX
-  #include <windows.h>
-#endif
 
-#include <filesystem>
-#include <mutex>
+#include <windows.h>
 #include <stdexcept>
 #include <string>
-
-#ifdef _WIN32
+#include <filesystem>
+#include <vector>
+#include <cstring>
 
 namespace {
 
-using FnQuery = DistanceQueryResult (*)(
-  double lat_deg,
-  double lon_deg,
-  const char* provider_id,
-  const char* shp_path_utf8
-);
+static std::wstring exe_dir_w() {
+  wchar_t buf[MAX_PATH];
+  DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+  std::wstring path(buf, buf + n);
+  auto pos = path.find_last_of(L"\\/");
+  if (pos == std::wstring::npos) return L".";
+  return path.substr(0, pos);
+}
 
-std::once_flag g_once;
-HMODULE g_mod = nullptr;
-FnQuery g_fn = nullptr;
-std::filesystem::path g_loaded_path;
+static std::string winerr_last_error(DWORD e) {
+  LPSTR msg = nullptr;
+  DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+  DWORD n = FormatMessageA(flags, nullptr, e, 0, (LPSTR)&msg, 0, nullptr);
+  std::string s = (n && msg) ? std::string(msg, msg + n) : std::string("unknown error");
+  if (msg) LocalFree(msg);
+  return s;
+}
 
-static std::wstring w(const std::filesystem::path& p) { return p.wstring(); }
+// Must match the plugin’s exported struct exactly (C ABI / POD).
+struct Dist2LandQueryOut {
+  double geodesic_m;
+  double land_lat_deg;
+  double land_lon_deg;
+  int    in_land; // 0/1
+};
 
-static void load_plugin_once() {
-  const auto base = win_exe_dir();
+using query_fn_t = int (*)(double lat_deg,
+                           double lon_deg,
+                           const char* provider_id_utf8,
+                           const char* shp_path_utf8,
+                           Dist2LandQueryOut* out,
+                           char* err_buf,
+                           size_t err_cap);
 
-  std::filesystem::path dll = base / "dist2land_gdal.dll";
-  if (!std::filesystem::exists(dll)) dll = base / "libdist2land_gdal.dll";
+static HMODULE g_mod = nullptr;
+static query_fn_t g_query = nullptr;
 
-  if (!std::filesystem::exists(dll)) {
-    throw std::runtime_error(
-      "dist2land_gdal plugin DLL not found next to executable. Expected:\n  " +
-      (base / "dist2land_gdal.dll").string() + "\n(or libdist2land_gdal.dll)"
-    );
-  }
+static void ensure_loaded() {
+  if (g_query) return;
 
-  // Avoid OS “This app can’t run” UI boxes on failure.
-  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+  const std::wstring dll_path = exe_dir_w() + L"\\dist2land_gdal.dll";
 
-  // Critical: make Windows search dependencies relative to the DLL being loaded.
-  g_mod = LoadLibraryExW(
-    w(dll).c_str(),
-    nullptr,
-    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
-  );
-
+  g_mod = LoadLibraryW(dll_path.c_str());
   if (!g_mod) {
-    const DWORD e = GetLastError();
+    DWORD e = GetLastError();
     throw std::runtime_error(
-      "Failed to load dist2land_gdal.dll from: " + dll.string() + "\n" + win_last_error_utf8(e) +
-      "\nMost common cause: a missing dependent DLL (transitive GDAL/PROJ/GEOS/etc)."
+      "Failed to load dist2land_gdal.dll from: " + std::filesystem::path(dll_path).string() +
+      " (Win32 error " + std::to_string(e) + ": " + winerr_last_error(e) + ")"
     );
   }
 
-  // Adjust to your actual exported symbol name.
-  FARPROC fp = GetProcAddress(g_mod, "dist2land_distance_query_geodesic_v1");
-  if (!fp) {
-    const DWORD e = GetLastError();
-    FreeLibrary(g_mod);
-    g_mod = nullptr;
-    throw std::runtime_error(
-      "Loaded plugin but missing symbol dist2land_distance_query_geodesic_v1\n" +
-      win_last_error_utf8(e)
-    );
+  FARPROC p = GetProcAddress(g_mod, "dist2land_gdal_query_geodesic");
+  if (!p) {
+    throw std::runtime_error("dist2land_gdal.dll missing export dist2land_gdal_query_geodesic");
   }
 
-  g_fn = reinterpret_cast<FnQuery>(fp);
-  g_loaded_path = dll;
+  g_query = reinterpret_cast<query_fn_t>(p);
 }
 
 } // namespace
 
-DistanceQueryResult distance_query_geodesic(double lat_deg,
-                                           double lon_deg,
+DistanceQueryResult distance_query_geodesic(double lat_deg, double lon_deg,
                                            const std::string& provider_id,
                                            const std::filesystem::path& shp_path) {
-  std::call_once(g_once, load_plugin_once);
-  if (!g_fn) throw std::runtime_error("GDAL plugin not loaded (unexpected)");
+  ensure_loaded();
 
-  // Keep shp_path as UTF-8-ish narrow; if you need full Unicode, pass wide and convert in plugin.
-  return g_fn(lat_deg, lon_deg, provider_id.c_str(), shp_path.string().c_str());
+  Dist2LandQueryOut out{};
+  char err[1024];
+  err[0] = 0;
+
+  // Use UTF-8 for cross-boundary safety.
+  const std::string shp_u8 = shp_path.u8string();
+
+  int ok = g_query(lat_deg, lon_deg,
+                  provider_id.c_str(),
+                  shp_u8.c_str(),
+                  &out,
+                  err, sizeof(err));
+
+  if (!ok) {
+    std::string msg = err[0] ? std::string(err) : std::string("Unknown plugin error");
+    throw std::runtime_error(msg);
+  }
+
+  DistanceQueryResult r;
+  r.provider_id = provider_id;
+  r.shp_path = shp_path;
+  r.geodesic_m = out.geodesic_m;
+  r.land_lat_deg = out.land_lat_deg;
+  r.land_lon_deg = out.land_lon_deg;
+  r.in_land = (out.in_land != 0);
+  return r;
 }
 
-#else
-
-// non-windows should not compile this file
-DistanceQueryResult distance_query_geodesic(double, double, const std::string&, const std::filesystem::path&) {
-  throw std::runtime_error("distance_call_win compiled on non-Windows");
-}
-
-#endif
+#endif // _WIN32
