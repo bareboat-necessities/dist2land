@@ -1,6 +1,6 @@
 #ifdef _WIN32
 
-#include "distance_call.h"
+#include "distance_call_win.h"
 #include "win_runtime.h"
 
 #include <windows.h>
