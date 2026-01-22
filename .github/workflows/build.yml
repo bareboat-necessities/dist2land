@@ -173,7 +173,7 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          GDAL_VER="3.12.1"
+          GDAL_VER="3.11.5"
           GDAL_URL="https://github.com/OSGeo/gdal/releases/download/v${GDAL_VER}/gdal-${GDAL_VER}.tar.gz"
 
           rm -rf _deps
