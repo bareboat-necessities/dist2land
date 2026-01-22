@@ -39,3 +39,12 @@
 
 # debug information files
 *.dwo
+
+/build/
+/out/
+/.cache/
+/.idea/
+/dist2land-data/
+/*.user
+/.vscode/
+/.DS_Store
