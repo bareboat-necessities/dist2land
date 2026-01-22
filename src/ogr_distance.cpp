@@ -1,9 +1,7 @@
 #include "ogr_distance.h"
-
 #include <gdal.h>
 #include <ogrsf_frmts.h>
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -52,13 +50,11 @@ static void update_best_on_lines(const OGRGeometry* geom,
     }
     return;
   }
-
-  // ignore
 }
 
-DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
-                                               const std::string& provider_id,
-                                               const std::filesystem::path& shp_path) {
+DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
+                                             const std::string& provider_id,
+                                             const std::filesystem::path& shp_path) {
   GDALAllRegister();
 
   GDALDataset* ds = (GDALDataset*)GDALOpenEx(
@@ -71,7 +67,6 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
   OGRLayer* layer = ds->GetLayer(0);
   if (!layer) { GDALClose(ds); throw std::runtime_error("No layer in shapefile"); }
 
-  // CRS transforms: WGS84 <-> local AEQD (meters)
   OGRSpatialReference wgs84;
   wgs84.importFromEPSG(4326);
 
@@ -89,11 +84,9 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
     if (toAEQD) OCTDestroyCoordinateTransformation(toAEQD);
     if (toWGS)  OCTDestroyCoordinateTransformation(toWGS);
     GDALClose(ds);
-    throw std::runtime_error("Failed to create coordinate transformations (WGS84 <-> AEQD). "
-                             "On Windows, ensure PROJ_LIB is set and proj data is bundled.");
+    throw std::runtime_error("Failed to create coordinate transformations (WGS84 <-> AEQD)");
   }
 
-  // Query point
   OGRPoint p_wgs(lon_deg, lat_deg);
   OGRPoint p_xy = p_wgs;
   if (p_xy.transform(toAEQD) != OGRERR_NONE) {
@@ -105,10 +98,8 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
 
   double best = std::numeric_limits<double>::infinity();
   OGRPoint best_pt_xy;
-  bool in_land = false;
 
-  double radius_m = 10'000.0;
-  const double max_radius_m = 20'000'000.0;
+  bool in_land = false;
 
   auto scanWindow = [&](double xmin, double ymin, double xmax, double ymax) -> bool {
     layer->SetSpatialFilterRect(xmin, ymin, xmax, ymax);
@@ -126,15 +117,14 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
         continue;
       }
 
-      // Inside/on land => distance 0, nearest land point = query point
       const double d_poly = p_xy.Distance(g_xy);
-      if (d_poly <= 1e-9) {
+      if (d_poly == 0.0) {
         best = 0.0;
         best_pt_xy = p_xy;
         in_land = true;
         OGRGeometryFactory::destroyGeometry(g_xy);
         OGRFeature::DestroyFeature(feat);
-        return true; // can stop scanning
+        return true; // done
       }
 
       OGRGeometry* bnd = g_xy->Boundary();
@@ -149,33 +139,34 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
     return false;
   };
 
+  double radius_m = 10'000.0;
+  const double max_radius_m = 20'000'000.0;
+
   while (radius_m <= max_radius_m) {
     double dlat, dlon;
     metersToDegWindow(lat_deg, radius_m, dlat, dlon);
 
-    const double ymin = lat_deg - dlat;
-    const double ymax = lat_deg + dlat;
+    double ymin = lat_deg - dlat;
+    double ymax = lat_deg + dlat;
     double xmin = lon_deg - dlon;
     double xmax = lon_deg + dlon;
 
-    bool hit_zero = false;
+    bool done = false;
 
-    // Antimeridian handling
     if (xmin < -180.0) {
-      hit_zero = scanWindow(xmin + 360.0, ymin, 180.0, ymax);
-      if (!hit_zero) hit_zero = scanWindow(-180.0, ymin, xmax, ymax);
+      done = scanWindow(xmin + 360.0, ymin, 180.0, ymax);
+      if (!done) done = scanWindow(-180.0, ymin, xmax, ymax);
     } else if (xmax > 180.0) {
-      hit_zero = scanWindow(xmin, ymin, 180.0, ymax);
-      if (!hit_zero) hit_zero = scanWindow(-180.0, ymin, xmax - 360.0, ymax);
+      done = scanWindow(xmin, ymin, 180.0, ymax);
+      if (!done) done = scanWindow(-180.0, ymin, xmax - 360.0, ymax);
     } else {
-      hit_zero = scanWindow(xmin, ymin, xmax, ymax);
+      done = scanWindow(xmin, ymin, xmax, ymax);
     }
 
     layer->SetSpatialFilter(nullptr);
+    if (done) break;
 
-    if (hit_zero) break;
     if (std::isfinite(best) && best <= radius_m * 1.2) break;
-
     radius_m *= 2.0;
   }
 
@@ -188,7 +179,6 @@ DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
     throw std::runtime_error("No distance computed (bad dataset?)");
   }
 
-  // Convert best point back to WGS84
   OGRPoint land_wgs = best_pt_xy;
   if (land_wgs.transform(toWGS) != OGRERR_NONE) {
     OCTDestroyCoordinateTransformation(toAEQD);
