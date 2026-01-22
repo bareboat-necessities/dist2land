@@ -18,6 +18,12 @@ add_executable(dist2land
   src/win_runtime.cpp
 )
 
+if (WIN32)
+  target_sources(dist2land PRIVATE src/distance_call_win.cpp)
+else()
+  target_sources(dist2land PRIVATE src/distance_call_posix.cpp src/ogr_distance.cpp)
+endif()
+
 target_include_directories(dist2land PRIVATE
   src
   ${LibArchive_INCLUDE_DIRS}
@@ -32,40 +38,32 @@ if (MSVC)
   target_compile_definitions(dist2land PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# --- GDAL backend strategy ---
-# Windows: build plugin DLL that links GDAL. EXE loads it at runtime.
-# Non-Windows: link GDAL directly into the EXE.
+# Copy providers.ini into build output so CI running from ./build works.
+add_custom_command(TARGET dist2land POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dist2land>/share/dist2land"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${CMAKE_SOURCE_DIR}/share/dist2land/providers.ini"
+          "$<TARGET_FILE_DIR:dist2land>/share/dist2land/providers.ini"
+  VERBATIM
+)
 
+# --- GDAL linkage ---
 if (WIN32)
-  target_sources(dist2land PRIVATE
-    src/distance_call_win.cpp
-  )
-
+  # Build plugin DLL that links to GDAL. dist2land.exe loads it on demand.
   add_library(dist2land_gdal SHARED
     src/dist2land_gdal_plugin.cpp
     src/ogr_distance.cpp
   )
   target_include_directories(dist2land_gdal PRIVATE src)
 
-  # Force predictable DLL name (no "lib" prefix) and place next to build/ outputs
-  set_target_properties(dist2land_gdal PROPERTIES
-    PREFIX ""
-    OUTPUT_NAME "dist2land_gdal"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-  )
-
-  # NOTE: On GitHub Actions + MSYS2, cmake is often a Windows-native cmake.exe.
-  # That means POSIX paths like /mingw64/include can look "non-existent".
-  # So: DO NOT use IMPORTED_TARGET on Windows. Translate paths using cygpath.
+  # DO NOT use IMPORTED_TARGET on Windows: it injects /mingw64/include which native CMake treats as non-existent.
   pkg_check_modules(GDAL REQUIRED gdal)
 
   function(msys_to_native out in)
     if ("${in}" MATCHES "^/")
-      execute_process(
-        COMMAND cygpath -m "${in}"
-        OUTPUT_VARIABLE _p
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
+      execute_process(COMMAND cygpath -m "${in}"
+                      OUTPUT_VARIABLE _p
+                      OUTPUT_STRIP_TRAILING_WHITESPACE)
       set(${out} "${_p}" PARENT_SCOPE)
     else()
       set(${out} "${in}" PARENT_SCOPE)
@@ -90,12 +88,18 @@ if (WIN32)
   target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
   target_link_libraries(dist2land_gdal PRIVATE ${GDAL_LIBRARIES})
 
-else()
-  target_sources(dist2land PRIVATE
-    src/distance_call_posix.cpp
-    src/ogr_distance.cpp
+  # Force name: dist2land_gdal.dll (no "lib" prefix)
+  set_target_properties(dist2land_gdal PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal")
+
+  # Place exe + plugin in build/ root (Ninja single-config).
+  set_target_properties(dist2land PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+  set_target_properties(dist2land_gdal PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   )
 
+else()
   pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
   target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)
 endif()
