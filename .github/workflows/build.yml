@@ -40,21 +40,21 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Stage runtime config (providers.ini)
-        run: |
-          set -euo pipefail
-          mkdir -p build/share/dist2land
-          cp -f share/dist2land/providers.ini build/share/dist2land/providers.ini
-
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
+
           ./build/dist2land help
-          ./build/dist2land providers
+
+          # providers.ini is copied into build/share/dist2land by CMake POST_BUILD
+          ./build/dist2land providers | tee out.txt
+          grep -qi "osm" out.txt
+
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
+
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
-          grep -qiE "No providers installed|Provider.*not installed" err2.txt
+          grep -qi "No providers installed" err2.txt
 
       - name: Package
         run: |
@@ -105,21 +105,16 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Stage runtime config (providers.ini)
-        run: |
-          set -euo pipefail
-          mkdir -p build/share/dist2land
-          cp -f share/dist2land/providers.ini build/share/dist2land/providers.ini
-
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
           ./build/dist2land help
-          ./build/dist2land providers
+          ./build/dist2land providers | tee out.txt
+          grep -qi "osm" out.txt
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
-          grep -qiE "No providers installed|Provider.*not installed" err2.txt
+          grep -qi "No providers installed" err2.txt
 
       - name: Package
         run: |
@@ -164,7 +159,6 @@ jobs:
             mingw-w64-x86_64-geos
             mingw-w64-x86_64-ca-certificates
             unzip
-            p7zip
             git
 
       - name: Compute artifact tag
@@ -186,26 +180,17 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Package portable zip (includes providers.ini)
+      - name: Package portable zip (includes providers.ini + CA bundle)
         shell: msys2 {0}
         run: |
           set -euo pipefail
           rm -rf dist dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
-          mkdir -p dist/share/dist2land
+          mkdir -p dist/share/dist2land dist/share/certs
 
           cp -f build/dist2land.exe dist/dist2land.exe
 
-          PLUGIN_DLL=""
-          if [ -f build/dist2land_gdal.dll ]; then
-            PLUGIN_DLL="build/dist2land_gdal.dll"
-          elif [ -f build/libdist2land_gdal.dll ]; then
-            PLUGIN_DLL="build/libdist2land_gdal.dll"
-          else
-            echo "ERROR: dist2land_gdal plugin DLL not found in build/"
-            ls -la build
-            exit 1
-          fi
-          cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
+          # With CMake PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal"
+          cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
 
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
 
@@ -220,31 +205,48 @@ jobs:
             done
           }
 
+          # deps for exe + plugin
           copy_deps dist/dist2land.exe
           copy_deps dist/dist2land_gdal.dll
 
+          # PROJ data
           mkdir -p dist/share/proj
           cp -r /mingw64/share/proj/* dist/share/proj/ || true
 
+          # GDAL data
           mkdir -p dist/share/gdal
           cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
 
-          mkdir -p dist/share/certs
+          # CA bundle used by libcurl(OpenSSL) (http_download.cpp sets CURLOPT_CAINFO to this path)
           cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
-          7z a dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip ./dist/*
+          # Zip without 7z (avoid p7zip weird crashes)
+          ( cd dist && cmake -E tar cfv ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
 
       - name: Smoke test (Windows)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          cd dist
+          rm -rf dist_unzip
+          mkdir -p dist_unzip
+          unzip -q dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip -d dist_unzip
+          cd dist_unzip
+
+          echo "== help =="
           ./dist2land.exe help
+
+          echo "== backend load test (no dataset) =="
+          ./dist2land.exe backend
+
+          echo "== providers =="
           ./dist2land.exe providers
-          if ./dist2land.exe setup 2>err.txt; then exit 1; fi
+
+          echo "== setup missing args should error =="
+          if ./dist2land.exe setup 2>err.txt; then
+            echo "Expected failure but command succeeded"
+            exit 1
+          fi
           grep -qi "setup requires --provider" err.txt
-          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
-          grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

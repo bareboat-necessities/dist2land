@@ -52,9 +52,9 @@ static void update_best_on_lines(const OGRGeometry* geom,
   }
 }
 
-DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
-                                             const std::string& provider_id,
-                                             const std::filesystem::path& shp_path) {
+DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
+                                               const std::string& provider_id,
+                                               const std::filesystem::path& shp_path) {
   GDALAllRegister();
 
   GDALDataset* ds = (GDALDataset*)GDALOpenEx(
@@ -98,10 +98,12 @@ DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
 
   double best = std::numeric_limits<double>::infinity();
   OGRPoint best_pt_xy;
-
   bool in_land = false;
 
-  auto scanWindow = [&](double xmin, double ymin, double xmax, double ymax) -> bool {
+  double radius_m = 10'000.0;
+  const double max_radius_m = 20'000'000.0;
+
+  auto scanWindow = [&](double xmin, double ymin, double xmax, double ymax) {
     layer->SetSpatialFilterRect(xmin, ymin, xmax, ymax);
     layer->ResetReading();
 
@@ -124,7 +126,7 @@ DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
         in_land = true;
         OGRGeometryFactory::destroyGeometry(g_xy);
         OGRFeature::DestroyFeature(feat);
-        return true; // done
+        return;
       }
 
       OGRGeometry* bnd = g_xy->Boundary();
@@ -136,11 +138,7 @@ DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
       OGRGeometryFactory::destroyGeometry(g_xy);
       OGRFeature::DestroyFeature(feat);
     }
-    return false;
   };
-
-  double radius_m = 10'000.0;
-  const double max_radius_m = 20'000'000.0;
 
   while (radius_m <= max_radius_m) {
     double dlat, dlon;
@@ -151,22 +149,23 @@ DistanceQueryResult distance_to_land_geodesic(double lat_deg, double lon_deg,
     double xmin = lon_deg - dlon;
     double xmax = lon_deg + dlon;
 
-    bool done = false;
-
     if (xmin < -180.0) {
-      done = scanWindow(xmin + 360.0, ymin, 180.0, ymax);
-      if (!done) done = scanWindow(-180.0, ymin, xmax, ymax);
+      scanWindow(xmin + 360.0, ymin, 180.0, ymax);
+      if (best == 0.0) break;
+      scanWindow(-180.0, ymin, xmax, ymax);
     } else if (xmax > 180.0) {
-      done = scanWindow(xmin, ymin, 180.0, ymax);
-      if (!done) done = scanWindow(-180.0, ymin, xmax - 360.0, ymax);
+      scanWindow(xmin, ymin, 180.0, ymax);
+      if (best == 0.0) break;
+      scanWindow(-180.0, ymin, xmax - 360.0, ymax);
     } else {
-      done = scanWindow(xmin, ymin, xmax, ymax);
+      scanWindow(xmin, ymin, xmax, ymax);
     }
 
     layer->SetSpatialFilter(nullptr);
-    if (done) break;
 
+    if (best == 0.0) break;
     if (std::isfinite(best) && best <= radius_m * 1.2) break;
+
     radius_m *= 2.0;
   }
 
