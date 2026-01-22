@@ -201,9 +201,32 @@ jobs:
       - name: Smoke test (Windows)
         shell: msys2 {0}
         run: |
+          set -euo pipefail
+
+          # Enter packaged folder (portable runtime: dlls + share/proj + share/gdal + dist2land_gdal.dll)
           cd dist
-          cmd //c dist2land.bat help
-          cmd //c dist2land.bat providers
+
+          echo "== help =="
+          ./dist2land.exe help
+
+          echo "== providers =="
+          ./dist2land.exe providers
+
+          echo "== setup missing args should error =="
+          if ./dist2land.exe setup 2>err.txt; then
+            echo "Expected failure but command succeeded"
+            exit 1
+          fi
+          cat err.txt
+          grep -qi "setup requires --provider" err.txt
+
+          echo "== distance without setup should not crash; should print friendly error =="
+          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then
+            echo "Expected failure but command succeeded"
+            exit 1
+          fi
+          cat err2.txt
+          grep -qi "No providers installed" err2.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
