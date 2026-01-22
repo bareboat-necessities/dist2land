@@ -9,6 +9,11 @@
 #include <filesystem>
 #include <stdexcept>
 
+#include <cmath>
+#ifndef isfinite
+  using std::isfinite;
+#endif
+
 static void print_usage() {
   std::cout <<
 R"(dist2land

@@ -39,10 +39,9 @@ DistanceResult distance_to_land_m(double lat_deg, double lon_deg,
   OGRLayer* layer = ds->GetLayer(0);
   if (!layer) { GDALClose(ds); throw std::runtime_error("No layer in shapefile"); }
 
-  // Try to ensure spatial index exists (if driver supports it)
-  if (layer->TestCapability(OLCCreateSpatialIndex)) {
-    (void)layer->CreateSpatialIndex();
-  }
+  // NOTE: spatial index creation is driver/version dependent.
+  // For best performance with shapefiles, create a .qix once:
+  //   ogrinfo land.shp -sql "CREATE SPATIAL INDEX ON <layername>"
 
   OGRPoint p_wgs(lon_deg, lat_deg);
 
