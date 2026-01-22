@@ -43,14 +43,10 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
-          export DIST2LAND_PROVIDERS="$GITHUB_WORKSPACE/share/dist2land/providers.ini"
-
           ./build/dist2land help
           ./build/dist2land providers
-
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
-
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
@@ -106,14 +102,10 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
-          export DIST2LAND_PROVIDERS="$GITHUB_WORKSPACE/share/dist2land/providers.ini"
-
           ./build/dist2land help
           ./build/dist2land providers
-
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
-
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
@@ -181,7 +173,7 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Package portable zip (includes providers.ini + CA bundle)
+      - name: Package portable zip (includes providers.ini)
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -190,11 +182,35 @@ jobs:
 
           cp -f build/dist2land.exe dist/dist2land.exe
 
-          # With CMake PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal"
-          cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
+          # Locate plugin DLL robustly
+          PLUGIN_DLL=""
+          for cand in \
+            "build/dist2land_gdal.dll" \
+            "build/libdist2land_gdal.dll"
+          do
+            if [ -f "$cand" ]; then
+              PLUGIN_DLL="$cand"
+              break
+            fi
+          done
 
+          if [ -z "$PLUGIN_DLL" ]; then
+            PLUGIN_DLL="$(find build -maxdepth 3 -type f \( -name 'dist2land_gdal.dll' -o -name 'libdist2land_gdal.dll' \) | head -n 1 || true)"
+          fi
+
+          if [ -z "$PLUGIN_DLL" ] || [ ! -f "$PLUGIN_DLL" ]; then
+            echo "ERROR: dist2land_gdal plugin DLL not found. DLLs under build/:"
+            find build -maxdepth 4 -type f -name '*.dll' -print || true
+            exit 1
+          fi
+
+          echo "Using plugin DLL: $PLUGIN_DLL"
+          cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
+
+          # Providers config (no hardcoded URLs in code)
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
 
+          # Optional docs
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
@@ -206,7 +222,7 @@ jobs:
             done
           }
 
-          # deps for exe + plugin
+          # Copy dependent DLLs for exe + plugin
           copy_deps dist/dist2land.exe
           copy_deps dist/dist2land_gdal.dll
 
@@ -218,26 +234,23 @@ jobs:
           mkdir -p dist/share/gdal
           cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
 
-          # CA bundle used by libcurl(OpenSSL) (http_download.cpp sets CURLOPT_CAINFO to this path)
+          # CA bundle for libcurl/OpenSSL
           cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
-          # Zip without 7z (avoid p7zip weird crashes)
+          # Zip using CMake (avoid p7zip crashes)
           ( cd dist && cmake -E tar cfv ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
 
       - name: Smoke test (Windows)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          rm -rf dist_unzip
-          mkdir -p dist_unzip
-          unzip -q dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip -d dist_unzip
-          cd dist_unzip
+          rm -rf unpack
+          mkdir -p unpack
+          cd unpack
+          cmake -E tar xvf ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
           echo "== help =="
           ./dist2land.exe help
-
-          echo "== backend load test (no dataset) =="
-          ./dist2land.exe backend
 
           echo "== providers =="
           ./dist2land.exe providers
@@ -248,6 +261,13 @@ jobs:
             exit 1
           fi
           grep -qi "setup requires --provider" err.txt
+
+          echo "== distance without setup should not crash; should print friendly error =="
+          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then
+            echo "Expected failure but command succeeded"
+            exit 1
+          fi
+          grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

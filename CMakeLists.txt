@@ -1,90 +1,46 @@
-cmake_minimum_required(VERSION 3.20)
-project(dist2land LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-find_package(CURL REQUIRED)
-find_package(LibArchive REQUIRED)
-find_package(PkgConfig REQUIRED)
-
-add_executable(dist2land
-  src/main.cpp
-  src/app_paths.cpp
-  src/providers.cpp
-  src/http_download.cpp
-  src/archive_extract.cpp
-  src/util.cpp
-  src/win_runtime.cpp
-)
-
-target_include_directories(dist2land PRIVATE
-  src
-  ${LibArchive_INCLUDE_DIRS}
-)
-
-target_link_libraries(dist2land PRIVATE
-  CURL::libcurl
-  ${LibArchive_LIBRARIES}
-)
-
-if (MSVC)
-  target_compile_definitions(dist2land PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
-
-# --- GDAL linkage / backend ---
-if (WIN32)
-  # Windows: build plugin DLL that links to GDAL
-  add_library(dist2land_gdal SHARED
-    src/dist2land_gdal_plugin.cpp
-    src/ogr_distance.cpp
-  )
-  target_include_directories(dist2land_gdal PRIVATE src)
-
-  # dist2land.exe uses plugin loader
-  target_sources(dist2land PRIVATE src/distance_call_win.cpp)
-
-  # Use pkg-config, but DO NOT use IMPORTED_TARGET on Windows (paths like /mingw64/include break)
-  pkg_check_modules(GDAL REQUIRED gdal)
-
-  function(msys_to_native out in)
-    if ("${in}" MATCHES "^/")
-      execute_process(
-        COMMAND cygpath -m "${in}"
-        OUTPUT_VARIABLE _p
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
-      set(${out} "${_p}" PARENT_SCOPE)
-    else()
-      set(${out} "${in}" PARENT_SCOPE)
-    endif()
-  endfunction()
-
-  set(GDAL_INCLUDE_DIRS_NATIVE "")
-  foreach(d IN LISTS GDAL_INCLUDE_DIRS)
-    msys_to_native(nd "${d}")
-    list(APPEND GDAL_INCLUDE_DIRS_NATIVE "${nd}")
-  endforeach()
-
-  set(GDAL_LIBRARY_DIRS_NATIVE "")
-  foreach(d IN LISTS GDAL_LIBRARY_DIRS)
-    msys_to_native(nd "${d}")
-    list(APPEND GDAL_LIBRARY_DIRS_NATIVE "${nd}")
-  endforeach()
-
-  target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
-  target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
-  target_compile_options(dist2land_gdal PRIVATE ${GDAL_CFLAGS_OTHER})
-  target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
-  target_link_libraries(dist2land_gdal PRIVATE ${GDAL_LIBRARIES})
-
-else()
-  # Non-Windows: link GDAL directly into the executable
-  target_sources(dist2land PRIVATE
-    src/distance_call_posix.cpp
-    src/ogr_distance.cpp
-  )
-
-  pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
-  target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)
-endif()
+Run set -euo pipefail
+  set -euo pipefail
+  rm -rf dist dist2land-sha-b26f48f-windows-x64.zip
+  mkdir -p dist/share/dist2land dist/share/certs
+  
+  cp -f build/dist2land.exe dist/dist2land.exe
+  
+  # With CMake PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal"
+  cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
+  
+  cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
+  
+  [ -f README.md ] && cp -f README.md dist/ || true
+  [ -f LICENSE ] && cp -f LICENSE dist/ || true
+  
+  copy_deps () {
+    local bin="$1"
+    [ -f "$bin" ] || return 0
+    ldd "$bin" | awk '{print $3}' | grep -E "^/mingw64/bin/.*\.dll$" | sort -u | while read -r d; do
+      [ -f "$d" ] && cp -f "$d" dist/
+    done
+  }
+  
+  # deps for exe + plugin
+  copy_deps dist/dist2land.exe
+  copy_deps dist/dist2land_gdal.dll
+  
+  # PROJ data
+  mkdir -p dist/share/proj
+  cp -r /mingw64/share/proj/* dist/share/proj/ || true
+  
+  # GDAL data
+  mkdir -p dist/share/gdal
+  cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
+  
+  # CA bundle used by libcurl(OpenSSL) (http_download.cpp sets CURLOPT_CAINFO to this path)
+  cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
+  
+  # Zip without 7z (avoid p7zip weird crashes)
+  ( cd dist && cmake -E tar cfv ../dist2land-sha-b26f48f-windows-x64.zip --format=zip . )
+  shell: D:\a\_temp\setup-msys2\msys2.CMD {0}
+  env:
+    MSYSTEM: MINGW64
+    ARTIFACT_TAG: sha-b26f48f
+cp: cannot stat 'build/dist2land_gdal.dll': No such file or directory
+Error: Process completed with exit code 1.
