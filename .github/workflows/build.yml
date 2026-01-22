@@ -271,10 +271,10 @@ jobs:
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
           # PROJ data (proj.db must be present)
-          cp -r /mingw64/share/proj/* dist/share/proj/ || true
-          if [ ! -f dist/share/proj/proj.db ]; then
-            echo "ERROR: proj.db missing in dist/share/proj"
-            ls -la dist/share/proj || true
+          cp -r /mingw64/share/proj/* dist/ || true
+          if [ ! -f dist/proj.db ]; then
+            echo "ERROR: proj.db missing in dist/"
+            ls -la dist/ || true
             exit 1
           fi
 
