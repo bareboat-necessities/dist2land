@@ -59,8 +59,8 @@ jobs:
           cp -f build/dist2land dist/
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
 
-          cp -f README.md dist/ || true
-          cp -f LICENSE dist/ || true
+          [ -f README.md ] && cp -f README.md dist/ || true
+          [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz -C dist .
 
@@ -118,8 +118,8 @@ jobs:
           cp -f build/dist2land dist/
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
 
-          cp -f README.md dist/ || true
-          cp -f LICENSE dist/ || true
+          [ -f README.md ] && cp -f README.md dist/ || true
+          [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz -C dist .
 
@@ -151,6 +151,7 @@ jobs:
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-geos
             mingw-w64-x86_64-ca-certificates
+            mingw-w64-x86_64-binutils
             unzip
             p7zip
             git
@@ -184,17 +185,15 @@ jobs:
           cp -f build/dist2land.exe dist/dist2land.exe
 
           # Plugin DLL name can vary (lib prefix) depending on toolchain defaults
-          PLUGIN_DLL=""
           if [ -f build/dist2land_gdal.dll ]; then
-            PLUGIN_DLL="build/dist2land_gdal.dll"
+            cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
           elif [ -f build/libdist2land_gdal.dll ]; then
-            PLUGIN_DLL="build/libdist2land_gdal.dll"
+            cp -f build/libdist2land_gdal.dll dist/dist2land_gdal.dll
           else
             echo "ERROR: dist2land_gdal plugin DLL not found in build/"
             ls -la build
             exit 1
           fi
-          cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
 
           # Providers config (no hardcoded URLs)
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
@@ -203,29 +202,42 @@ jobs:
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          copy_deps () {
+          # PROJ/GDAL data
+          mkdir -p dist/share/proj dist/share/gdal dist/share/certs
+          cp -r /mingw64/share/proj/* dist/share/proj/ || true
+          cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
+          cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
+
+          # ---- Copy full transitive DLL dependency closure (exe + plugin) ----
+          list_imports () {
             local bin="$1"
-            [ -f "$bin" ] || return 0
-            ldd "$bin" | awk '{print $3}' | grep -E "^/mingw64/bin/.*\.dll$" | sort -u | while read -r d; do
-              [ -f "$d" ] && cp -f "$d" dist/
-            done
+            objdump -p "$bin" 2>/dev/null | sed -n 's/^[[:space:]]*DLL Name: \(.*\)$/\1/p'
           }
 
-          # Copy dependent DLLs for exe + plugin
-          copy_deps dist/dist2land.exe
-          copy_deps dist/dist2land_gdal.dll
+          copy_one_dep () {
+            local name="$1"
+            local src="/mingw64/bin/$name"
+            if [ -f "$src" ] && [ ! -f "dist/$name" ]; then
+              cp -f "$src" "dist/$name"
+              return 0
+            fi
+            return 1
+          }
 
-          # PROJ data (needed for CRS transforms)
-          mkdir -p dist/share/proj
-          cp -r /mingw64/share/proj/* dist/share/proj/ || true
-
-          # GDAL data (sometimes needed depending on drivers/config)
-          mkdir -p dist/share/gdal
-          cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
-
-          # CA bundle for libcurl/OpenSSL
-          mkdir -p dist/share/certs
-          cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
+          # Fixed-point iteration until no new deps appear
+          while :; do
+            changed=0
+            for bin in dist/*.exe dist/*.dll; do
+              [ -f "$bin" ] || continue
+              while IFS= read -r dep; do
+                # only ship mingw64 runtime libs; Windows system DLLs are ignored
+                if copy_one_dep "$dep"; then
+                  changed=1
+                fi
+              done < <(list_imports "$bin")
+            done
+            [ "$changed" -eq 0 ] && break
+          done
 
           7z a dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip ./dist/*
 
