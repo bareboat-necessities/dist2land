@@ -19,6 +19,7 @@ static void print_usage() {
 R"(dist2land
 
 Commands:
+  dist2land help
   dist2land providers
   dist2land setup --provider (osm|gshhg|ne|all)
   dist2land distance --lat <deg> --lon <deg>
@@ -33,6 +34,30 @@ Examples:
 
 Output:
   <distance> <units> <land_lat_deg> <land_lon_deg>
+
+Notes:
+  - First run: you must download a dataset:
+      dist2land setup --provider osm
+  - If your point is on land (inside polygon), distance is 0 and the reported land point
+    is the query point itself.
+
+Performance (optional spatial index for faster queries):
+  dist2land uses OGR spatial filters; performance improves a lot if your shapefile has a .qix index.
+  Create it once per provider shapefile using GDAL's ogrinfo tool (produces a *.qix next to the *.shp).
+
+  1) Find the layer name (usually the shapefile base name):
+     ogrinfo -ro -so "<path-to-shapefile>.shp"
+
+  2) Create the spatial index:
+     ogrinfo -ro "<path-to-shapefile>.shp" -sql "CREATE SPATIAL INDEX ON <layer_name>"
+
+  Example (layer name matches file base name):
+     ogrinfo -ro -so "land_polygons.shp"
+     ogrinfo -ro "land_polygons.shp" -sql "CREATE SPATIAL INDEX ON land_polygons"
+
+  You can locate the provider shapefile path by running:
+     dist2land distance --lat 0 --lon 0 --provider osm
+  (it prints shp=... on stderr).
 )";
 }
 
@@ -135,7 +160,6 @@ static double rhumb_distance_sphere_m(double lat1_deg, double lon1_deg,
   const double dlam = wrap_pi(lam2 - lam1);
 
   const auto merc = [](double phi) {
-    // clamp away from poles
     const double eps = 1e-12;
     const double p = std::max(std::min(phi,  kPi/2 - eps), -kPi/2 + eps);
     return std::log(std::tan(kPi/4 + p/2));
@@ -208,6 +232,7 @@ int main(int argc, char** argv) {
     if (argc < 2) { print_usage(); return 2; }
 
     const std::string cmd = to_lower(av.args[1]);
+    if (cmd == "help" || cmd == "-h" || cmd == "--help") { print_usage(); return 0; }
     if (cmd == "providers") { cmd_providers(); return 0; }
     if (cmd == "setup")     { cmd_setup(av);   return 0; }
     if (cmd == "distance")  { cmd_distance(av); return 0; }
