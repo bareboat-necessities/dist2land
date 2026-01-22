@@ -30,7 +30,7 @@ cmake --build build -j
 ## Query
 
 ```bash
-./build/dist2land distance --lat 36.84 --lon -122.42
+./build/dist2land distance --lat 36.84 --lon -62.42
 ```
 
 ## Creating spacial index (Windows)

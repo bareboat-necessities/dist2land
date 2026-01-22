@@ -49,7 +49,7 @@ jobs:
           ./build/dist2land providers
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
-          if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
+          if ./build/dist2land distance --lat 36.84 --lon -62.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Package
@@ -110,7 +110,7 @@ jobs:
           ./build/dist2land providers
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
-          if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
+          if ./build/dist2land distance --lat 36.84 --lon -62.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Package
@@ -353,7 +353,7 @@ jobs:
           if ./dist2land.exe setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
 
-          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
+          if ./dist2land.exe distance --lat 36.84 --lon -62.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Upload artifact

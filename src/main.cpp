@@ -30,7 +30,7 @@ Commands:
 
 Examples:
   dist2land setup --provider osm
-  dist2land distance --lat 36.84 --lon -122.42 --provider auto
+  dist2land distance --lat 36.84 --lon -62.42 --provider auto
   dist2land distance --lat 0 --lon -30 --metric rhumb --units nm
 
 Output:
