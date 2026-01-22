@@ -33,3 +33,15 @@ cmake --build build -j
 ./build/dist2land distance --lat 36.84 --lon -122.42
 ```
 
+## Creating spacial index (Windows)
+
+Example for OSM:
+
+```bash
+ogrinfo -ro -so ../../../AppData/Local/dist2land/providers/osm/extracted/land-polygons-split-4326/land_polygons.shp
+```
+
+```bash
+ogrinfo -ro ../../../AppData/Local/dist2land/providers/osm/extracted/land-polygons-split-4326/land_polygons.shp -sql "CREATE SPATIAL INDEX ON land_polygons"
+```
+
