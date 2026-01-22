@@ -84,9 +84,9 @@ if (WIN32)
 
   target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
   target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
-  target_compile_options(dist2land_gdal PRIVATE ${GDAL_CFLAGS_OTHER})
-  target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
-  target_link_libraries(dist2land_gdal PRIVATE ${GDAL_LIBRARIES})
+
+  # Link ONLY against gdal import lib; runtime deps are shipped next to the exe.
+  target_link_libraries(dist2land_gdal PRIVATE gdal)
 
   # Force name: dist2land_gdal.dll (no "lib" prefix)
   set_target_properties(dist2land_gdal PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal")
@@ -98,7 +98,6 @@ if (WIN32)
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   )
-
 else()
   pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
   target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)

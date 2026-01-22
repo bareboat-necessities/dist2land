@@ -153,13 +153,12 @@ jobs:
             mingw-w64-x86_64-libarchive
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-geos
-            mingw-w64-x86_64-sqlite3
-            mingw-w64-x86_64-expat
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-libxml2
             mingw-w64-x86_64-ca-certificates
-            git
             unzip
+            git
+            curl
+            tar
 
       - name: Compute artifact tag
         shell: msys2 {0}
@@ -170,102 +169,71 @@ jobs:
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Build minimal GDAL (Windows-only)
+      - name: Build minimal GDAL (Windows only)
         shell: msys2 {0}
         run: |
           set -euo pipefail
+          GDAL_VER="3.12.1"
+          GDAL_URL="https://github.com/OSGeo/gdal/releases/download/v${GDAL_VER}/gdal-${GDAL_VER}.tar.gz"
 
-          # Pin a GDAL version to keep the ABI stable.
-          GDAL_TAG="v3.8.5"
-          rm -rf _gdal_src _gdal_build _gdal_install
-          git clone --depth 1 --branch "$GDAL_TAG" https://github.com/OSGeo/gdal.git _gdal_src
+          rm -rf _deps
+          mkdir -p _deps
+          cd _deps
 
-          # Install prefix as a *native* Windows path so CMake path existence checks don't choke on /mingw64/...
-          PREFIX_MSYS="$PWD/_gdal_install"
-          PREFIX_WIN="$(cygpath -m "$PREFIX_MSYS")"
+          echo "Downloading GDAL ${GDAL_VER}..."
+          curl -L --retry 3 --retry-delay 2 -o gdal.tar.gz "${GDAL_URL}"
+          tar -xzf gdal.tar.gz
 
-          cmake -S _gdal_src -B _gdal_build -G Ninja \
+          echo "Configuring minimal GDAL..."
+          cmake -S "gdal-${GDAL_VER}" -B gdal-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX_WIN" \
-            -DBUILD_TESTING=OFF \
-            -DGDAL_BUILD_APPS=OFF \
-            -DGDAL_BUILD_PYTHON_BINDINGS=OFF \
-            -DGDAL_ENABLE_DRIVER_PDF=OFF \
-            -DGDAL_ENABLE_DRIVER_ARROW=OFF \
-            -DGDAL_ENABLE_DRIVER_PARQUET=OFF \
-            -DGDAL_ENABLE_DRIVER_NETCDF=OFF \
-            -DGDAL_ENABLE_DRIVER_HDF5=OFF \
-            -DGDAL_ENABLE_DRIVER_POSTGRESQL=OFF \
-            -DGDAL_ENABLE_DRIVER_MYSQL=OFF \
-            -DGDAL_ENABLE_DRIVER_MSSQLSPATIAL=OFF \
-            -DGDAL_ENABLE_DRIVER_OCI=OFF \
-            -DGDAL_ENABLE_DRIVER_GPKG=OFF \
-            -DGDAL_ENABLE_DRIVER_SQLITE=OFF \
-            -DGDAL_ENABLE_DRIVER_OPENFILEGDB=OFF \
-            -DGDAL_ENABLE_DRIVER_FILEGDB=OFF \
-            -DGDAL_ENABLE_DRIVER_KML=OFF \
-            -DGDAL_ENABLE_DRIVER_WFS=OFF \
-            -DGDAL_ENABLE_DRIVER_WMS=OFF \
-            -DGDAL_ENABLE_DRIVER_HTTP=OFF \
-            -DGDAL_USE_CURL=OFF \
-            -DGDAL_USE_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/gdal-min" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_APPS=OFF \
+            -DBUILD_PYTHON_BINDINGS=OFF \
+            -DBUILD_JAVA_BINDINGS=OFF \
+            -DBUILD_CSHARP_BINDINGS=OFF \
+            -DGDAL_BUILD_OPTIONAL_DRIVERS=OFF \
+            -DOGR_BUILD_OPTIONAL_DRIVERS=OFF \
+            -DGDAL_USE_EXTERNAL_LIBS=OFF \
             -DGDAL_USE_PROJ=ON \
-            -DGDAL_USE_GEOS=ON \
-            -DOGR_ENABLE_DRIVER_SHAPE=ON
+            -DGDAL_USE_GEOS=ON
 
-          cmake --build _gdal_build -j
-          cmake --install _gdal_build
+          echo "Building/installing minimal GDAL..."
+          cmake --build gdal-build -j
+          cmake --install gdal-build
 
-          echo "GDAL_PREFIX=$PREFIX_MSYS" >> "$GITHUB_ENV"
-          echo "GDAL_PREFIX_WIN=$PREFIX_WIN" >> "$GITHUB_ENV"
+          echo "GDAL prefix: $PWD/gdal-min"
+          ls -la "$PWD/gdal-min/bin" || true
+          ls -la "$PWD/gdal-min/lib/pkgconfig" || true
 
-          # Verify pkg-config file exists
-          ls -la "$PREFIX_MSYS/lib/pkgconfig" || true
-          test -f "$PREFIX_MSYS/lib/pkgconfig/gdal.pc"
-
-      - name: Configure (release) using minimal GDAL
+      - name: Configure (release)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          export PATH="$GDAL_PREFIX/bin:$PATH"
-          export PKG_CONFIG_PATH="$GDAL_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          GDAL_PREFIX="$PWD/_deps/gdal-min"
+          export PKG_CONFIG_PATH="$GDAL_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         shell: msys2 {0}
         run: |
-          set -euo pipefail
           cmake --build build -j
 
       - name: Package portable zip (minimal GDAL)
         shell: msys2 {0}
         run: |
           set -euo pipefail
+          GDAL_PREFIX="$PWD/_deps/gdal-min"
+
           rm -rf dist dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
-          mkdir -p dist/share/dist2land dist/share/certs dist/share/proj dist/share/gdal
+          mkdir -p dist/share/dist2land dist/share/certs dist/share/gdal dist/share/proj
 
           cp -f build/dist2land.exe dist/dist2land.exe
+          cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
 
-          # Plugin DLL name can vary; copy as dist2land_gdal.dll
-          PLUGIN_DLL=""
-          for cand in \
-            "build/dist2land_gdal.dll" \
-            "build/libdist2land_gdal.dll"
-          do
-            if [ -f "$cand" ]; then
-              PLUGIN_DLL="$cand"
-              break
-            fi
-          done
-          if [ -z "$PLUGIN_DLL" ]; then
-            PLUGIN_DLL="$(find build -maxdepth 3 -type f \( -name 'dist2land_gdal.dll' -o -name 'libdist2land_gdal.dll' \) | head -n 1 || true)"
-          fi
-          if [ -z "$PLUGIN_DLL" ] || [ ! -f "$PLUGIN_DLL" ]; then
-            echo "ERROR: dist2land_gdal plugin DLL not found. DLLs under build/:"
-            find build -maxdepth 4 -type f -name '*.dll' -print || true
-            exit 1
-          fi
-          cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
+          # Ship minimal GDAL DLL(s)
+          cp -f "$GDAL_PREFIX/bin/"*.dll dist/ || true
 
           # Providers config
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
@@ -274,9 +242,16 @@ jobs:
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          # Copy minimal GDAL runtime (from our prefix) + any dependent DLLs.
-          # Ensure the loader prefers local folder first.
-          cp -f "$GDAL_PREFIX/bin/"*.dll dist/ || true
+          # PROJ data (from MSYS2 package)
+          cp -r /mingw64/share/proj/* dist/share/proj/ || true
+
+          # GDAL data (from *our* minimal GDAL install)
+          if [ -d "$GDAL_PREFIX/share/gdal" ]; then
+            cp -r "$GDAL_PREFIX/share/gdal/"* dist/share/gdal/ || true
+          fi
+
+          # CA bundle
+          cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
           copy_deps_recursive () {
             local -a queue=("$@")
@@ -295,27 +270,29 @@ jobs:
                   cp -f "$d" dist/
                   queue+=("dist/$base")
                 fi
-              done < <(ldd "$bin" | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$|^'"$(printf %q "$GDAL_PREFIX")"'/bin/.*\.dll$' | sort -u)
+              done < <(ldd "$bin" | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$' | sort -u)
             done
           }
 
-          # deps for exe + plugin (which depends on our GDAL)
-          copy_deps_recursive dist/dist2land.exe dist/dist2land_gdal.dll
+          # Ensure we recurse from exe + plugin + gdal DLL(s)
+          GDAL_DLLS=(dist/libgdal*.dll dist/gdal*.dll dist/ogr*.dll)
+          copy_deps_recursive dist/dist2land.exe dist/dist2land_gdal.dll "${GDAL_DLLS[@]}"
 
-          # PROJ data (still from msys2)
-          cp -r /mingw64/share/proj/* dist/share/proj/ || true
+          # Hard fail if any dependency is still missing
+          check_no_missing () {
+            local f="$1"
+            [ -f "$f" ] || return 0
+            if ldd "$f" | grep -qi "not found"; then
+              echo "ERROR: missing dependency for $f"
+              ldd "$f" || true
+              exit 1
+            fi
+          }
 
-          # GDAL data: copy from minimal GDAL install if it exists; otherwise safe fallback to msys2
-          if [ -d "$GDAL_PREFIX/share/gdal" ]; then
-            cp -r "$GDAL_PREFIX/share/gdal/"* dist/share/gdal/ || true
-          else
-            cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
-          fi
+          check_no_missing dist/dist2land.exe
+          check_no_missing dist/dist2land_gdal.dll
+          for f in dist/libgdal*.dll; do check_no_missing "$f"; done
 
-          # CA bundle for libcurl/OpenSSL (your http_download uses CURLOPT_CAINFO)
-          cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
-
-          # Zip using CMake (avoid p7zip)
           ( cd dist && cmake -E tar cfv ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
 
       - name: Smoke test (Windows)
@@ -327,24 +304,19 @@ jobs:
           cd unpack
           cmake -E tar xvf ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
-          echo "== help =="
-          ./dist2land.exe help
+          export PROJ_LIB="$PWD/share/proj"
+          export GDAL_DATA="$PWD/share/gdal"
+          export CURL_CA_BUNDLE="$PWD/share/certs/ca-bundle.crt"
+          export SSL_CERT_FILE="$PWD/share/certs/ca-bundle.crt"
+          export GDAL_DRIVER_PATH=
 
-          echo "== providers =="
+          ./dist2land.exe help
           ./dist2land.exe providers
 
-          echo "== setup missing args should error =="
-          if ./dist2land.exe setup 2>err.txt; then
-            echo "Expected failure but command succeeded"
-            exit 1
-          fi
+          if ./dist2land.exe setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
 
-          echo "== distance without setup should not crash; should print friendly error =="
-          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then
-            echo "Expected failure but command succeeded"
-            exit 1
-          fi
+          if ./dist2land.exe distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Upload artifact
