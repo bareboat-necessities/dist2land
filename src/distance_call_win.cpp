@@ -71,12 +71,10 @@ static void load_backend_or_throw() {
   b.dll_path = exe_dir() / "dist2land_gdal.dll";
   const std::wstring dll_w = b.dll_path.wstring();
 
-  DWORD flags = 0;
-  // Prefer “load deps from the DLL’s directory” (fixes many PATH/mismatch issues).
-  flags |= 0x00000100 /* LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR */;
-  flags |= 0x00001000 /* LOAD_LIBRARY_SEARCH_DEFAULT_DIRS */;
-
-  HMODULE mod = LoadLibraryExW(dll_w.c_str(), nullptr, flags);
+  HMODULE mod = LoadLibraryExW(plugin_path.c_str(), nullptr,
+      LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+      LOAD_LIBRARY_SEARCH_DEFAULT_DIRS |
+      LOAD_LIBRARY_SEARCH_USER_DIRS);
   if (!mod) {
     DWORD err = GetLastError();
     std::wstring msg = format_win_error(err);
