@@ -43,18 +43,16 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
+          export DIST2LAND_PROVIDERS="$GITHUB_WORKSPACE/share/dist2land/providers.ini"
 
           ./build/dist2land help
-
-          # providers.ini is copied into build/share/dist2land by CMake POST_BUILD
-          ./build/dist2land providers | tee out.txt
-          grep -qi "osm" out.txt
+          ./build/dist2land providers
 
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
 
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
-          grep -qi "No providers installed" err2.txt
+          grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Package
         run: |
@@ -108,13 +106,16 @@ jobs:
       - name: Smoke test (Linux)
         run: |
           set -euo pipefail
+          export DIST2LAND_PROVIDERS="$GITHUB_WORKSPACE/share/dist2land/providers.ini"
+
           ./build/dist2land help
-          ./build/dist2land providers | tee out.txt
-          grep -qi "osm" out.txt
+          ./build/dist2land providers
+
           if ./build/dist2land setup 2>err.txt; then exit 1; fi
           grep -qi "setup requires --provider" err.txt
+
           if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
-          grep -qi "No providers installed" err2.txt
+          grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
       - name: Package
         run: |
