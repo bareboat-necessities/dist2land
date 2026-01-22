@@ -4,7 +4,6 @@
 
 #include "dist2land_gdal_plugin_api.h"
 
-#define NOMINMAX
 #include <windows.h>
 
 #include <filesystem>

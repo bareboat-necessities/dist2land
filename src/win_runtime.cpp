@@ -4,7 +4,6 @@
 #include <string>
 
 #ifdef _WIN32
-  #define NOMINMAX
   #include <windows.h>
 
 static std::wstring exe_dir_w() {
