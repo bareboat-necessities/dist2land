@@ -1,101 +1,134 @@
-#include "distance_iface.h"
-
 #ifdef _WIN32
 
-#include "dist2land_gdal_plugin_api.h"
+#include "distance_iface.h"
 
 #include <windows.h>
 
 #include <filesystem>
-#include <stdexcept>
 #include <string>
+#include <stdexcept>
+#include <sstream>
+#include <vector>
+#include <cstdio>
 
-namespace {
-
-static std::wstring exe_dir_w() {
-  wchar_t buf[MAX_PATH];
-  DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-  std::wstring path(buf, buf + n);
-  auto pos = path.find_last_of(L"\\/");
-  if (pos == std::wstring::npos) return L".";
-  return path.substr(0, pos);
-}
-
-static std::string winerr_last_error(DWORD e) {
+static std::string win_last_error_string(DWORD err) {
+  if (err == 0) return "OK";
   LPSTR msg = nullptr;
-  DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
-  DWORD n = FormatMessageA(flags, nullptr, e, 0, (LPSTR)&msg, 0, nullptr);
-  std::string s = (n && msg) ? std::string(msg, msg + n) : std::string("unknown error");
+  DWORD n = FormatMessageA(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr,
+      err,
+      MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+      (LPSTR)&msg,
+      0,
+      nullptr);
+  std::string out = (n && msg) ? std::string(msg, msg + n) : ("Win32 error " + std::to_string(err));
   if (msg) LocalFree(msg);
-  return s;
+  while (!out.empty() && (out.back() == '\r' || out.back() == '\n')) out.pop_back();
+  return out;
 }
 
-using query_fn_t = int (*)(double lat_deg,
-                           double lon_deg,
-                           const char* provider_id_utf8,
-                           const char* shp_path_utf8,
-                           Dist2LandQueryOut* out,
-                           char* err_buf,
-                           size_t err_cap);
-
-static HMODULE g_mod = nullptr;
-static query_fn_t g_query = nullptr;
-
-static void ensure_loaded() {
-  if (g_query) return;
-
-  const std::wstring dll_path = exe_dir_w() + L"\\dist2land_gdal.dll";
-
-  g_mod = LoadLibraryW(dll_path.c_str());
-  if (!g_mod) {
-    DWORD e = GetLastError();
-    throw std::runtime_error(
-      "Failed to load dist2land_gdal.dll from: " + std::filesystem::path(dll_path).string() +
-      " (Win32 error " + std::to_string(e) + ": " + winerr_last_error(e) + "). "
-      "This almost always means a dependent DLL is missing. Run: ldd dist2land_gdal.dll"
-    );
-  }
-
-  FARPROC p = GetProcAddress(g_mod, kDist2LandGdalProcName);
-  if (!p) {
-    throw std::runtime_error(std::string("dist2land_gdal.dll missing export: ") + kDist2LandGdalProcName);
-  }
-
-  g_query = reinterpret_cast<query_fn_t>(p);
+static std::filesystem::path exe_dir() {
+  std::wstring buf;
+  buf.resize(32768);
+  DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
+  if (n == 0 || n >= buf.size()) return std::filesystem::path(L".");
+  buf.resize(n);
+  std::filesystem::path p(buf);
+  return p.parent_path();
 }
 
-} // namespace
+// Convert a filesystem path to UTF-8 bytes (std::string) under C++20 where u8string() is char8_t.
+static std::string path_to_utf8_bytes(const std::filesystem::path& p) {
+  std::u8string u8 = p.u8string();
+  return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+using DistFn = int (*)(const char* shp_path,
+                       const char* provider_id,
+                       double lat_deg, double lon_deg,
+                       double* geodesic_m,
+                       double* land_lat_deg,
+                       double* land_lon_deg,
+                       char* errbuf,
+                       int errbuf_cap);
+
+struct GdalPlugin {
+  HMODULE h = nullptr;
+  DistFn fn = nullptr;
+  std::filesystem::path dll_path;
+
+  GdalPlugin() {
+    dll_path = exe_dir() / "dist2land_gdal.dll";
+
+    // Load the plugin from an absolute path. Dependencies will be searched relative to the DLL.
+    h = LoadLibraryW(dll_path.wstring().c_str());
+    if (!h) {
+      DWORD e = GetLastError();
+      std::ostringstream oss;
+      oss << "Failed to load dist2land_gdal.dll from: " << dll_path.string()
+          << " (LoadLibraryW error " << e << ": " << win_last_error_string(e) << ")";
+      throw std::runtime_error(oss.str());
+    }
+
+    fn = reinterpret_cast<DistFn>(GetProcAddress(h, "dist2land_gdal_distance"));
+    if (!fn) {
+      DWORD e = GetLastError();
+      std::ostringstream oss;
+      oss << "dist2land_gdal.dll missing symbol dist2land_gdal_distance"
+          << " (GetProcAddress error " << e << ": " << win_last_error_string(e) << ")";
+      FreeLibrary(h);
+      h = nullptr;
+      throw std::runtime_error(oss.str());
+    }
+  }
+
+  ~GdalPlugin() {
+    if (h) FreeLibrary(h);
+  }
+};
+
+static GdalPlugin& plugin() {
+  static GdalPlugin p;
+  return p;
+}
 
 DistanceQueryResult distance_query_geodesic(double lat_deg, double lon_deg,
-                                           const std::string& provider_id,
-                                           const std::filesystem::path& shp_path) {
-  ensure_loaded();
+                                            const std::string& provider_id,
+                                            const std::filesystem::path& shp_path) {
+  auto& p = plugin();
 
-  Dist2LandQueryOut out{};
-  char err[1024];
-  err[0] = 0;
+  // C++20: u8string() returns std::u8string; convert to bytes for the plugin ABI.
+  const std::string shp_u8 = path_to_utf8_bytes(shp_path);
 
-  const std::string shp_u8 = shp_path.u8string();
+  double geodesic_m = 0.0;
+  double land_lat = 0.0;
+  double land_lon = 0.0;
+  char err[2048] = {0};
 
-  const int rc = g_query(lat_deg, lon_deg,
-                        provider_id.c_str(),
-                        shp_u8.c_str(),
-                        &out,
-                        err, sizeof(err));
+  const char* prov_c = provider_id.empty() ? nullptr : provider_id.c_str();
+
+  int rc = p.fn(shp_u8.c_str(),
+                prov_c,
+                lat_deg, lon_deg,
+                &geodesic_m,
+                &land_lat,
+                &land_lon,
+                err,
+                (int)sizeof(err));
 
   if (rc != 0) {
-    std::string msg = err[0] ? std::string(err) : std::string("GDAL plugin call failed");
-    throw std::runtime_error(msg);
+    std::string msg = (err[0] != '\0') ? std::string(err) : "Unknown error from GDAL backend";
+    throw std::runtime_error("GDAL backend failed: " + msg);
   }
 
-  DistanceQueryResult r;
-  r.provider_id = provider_id;
-  r.shp_path = shp_path;
-  r.geodesic_m = out.geodesic_m;
-  r.land_lat_deg = out.land_lat_deg;
-  r.land_lon_deg = out.land_lon_deg;
-  r.in_land = (out.in_land != 0);
-  return r;
+  DistanceQueryResult out;
+  out.geodesic_m = geodesic_m;
+  out.land_lat_deg = land_lat;
+  out.land_lon_deg = land_lon;
+  out.provider_id = provider_id;
+  out.shp_path = shp_path;
+  return out;
 }
 
 #endif // _WIN32
