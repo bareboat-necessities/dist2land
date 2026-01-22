@@ -149,10 +149,10 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-curl
-            mingw-w64-x86_64-libarchive
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-geos
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-libarchive
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-ca-certificates
             unzip
@@ -169,10 +169,11 @@ jobs:
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
 
-      - name: Build minimal GDAL (Windows only)
+      - name: Build minimal GDAL + ogrinfo (Windows only)
         shell: msys2 {0}
         run: |
           set -euo pipefail
+
           GDAL_VER="3.11.5"
           GDAL_URL="https://github.com/OSGeo/gdal/releases/download/v${GDAL_VER}/gdal-${GDAL_VER}.tar.gz"
 
@@ -184,35 +185,57 @@ jobs:
           curl -L --retry 3 --retry-delay 2 -o gdal.tar.gz "${GDAL_URL}"
           tar -xzf gdal.tar.gz
 
-          echo "Configuring minimal GDAL..."
-          cmake -S "gdal-${GDAL_VER}" -B gdal-build -G Ninja \
+          GDAL_SRC="$PWD/gdal-${GDAL_VER}"
+          GDAL_BUILD="$PWD/gdal-build"
+          GDAL_PREFIX="$PWD/gdal-min"
+
+          # Fail-safe patch: avoid the libopencad <cstdint> issue if CAD still compiles anywhere.
+          CAD_FILE="$GDAL_SRC/ogr/ogrsf_frmts/cad/libopencad/dwg/r2000.cpp"
+          if [ -f "$CAD_FILE" ]; then
+            if ! grep -q "<cstdint>" "$CAD_FILE"; then
+              echo "Patching GDAL CAD file to include <cstdint>..."
+              perl -0777 -i -pe 's/#include <limits>\R/#include <limits>\n#include <cstdint>\n/s' "$CAD_FILE" || true
+            fi
+          fi
+
+          echo "Configuring minimal GDAL (with ogrinfo)..."
+          cmake -S "$GDAL_SRC" -B "$GDAL_BUILD" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PWD/gdal-min" \
+            -DCMAKE_INSTALL_PREFIX="$GDAL_PREFIX" \
             -DBUILD_SHARED_LIBS=ON \
-            -DBUILD_APPS=OFF \
+            -DBUILD_APPS=ON \
             -DBUILD_PYTHON_BINDINGS=OFF \
             -DBUILD_JAVA_BINDINGS=OFF \
             -DBUILD_CSHARP_BINDINGS=OFF \
             -DGDAL_BUILD_OPTIONAL_DRIVERS=OFF \
             -DOGR_BUILD_OPTIONAL_DRIVERS=OFF \
-            -DGDAL_USE_EXTERNAL_LIBS=OFF \
+            -DOGR_ENABLE_DRIVER_CAD=OFF \
+            -DGDAL_USE_READLINE=OFF \
+            -DGDAL_USE_CURL=OFF \
             -DGDAL_USE_PROJ=ON \
             -DGDAL_USE_GEOS=ON
 
           echo "Building/installing minimal GDAL..."
-          cmake --build gdal-build -j
-          cmake --install gdal-build
+          cmake --build "$GDAL_BUILD" -j
+          cmake --install "$GDAL_BUILD"
 
-          echo "GDAL prefix: $PWD/gdal-min"
-          ls -la "$PWD/gdal-min/bin" || true
-          ls -la "$PWD/gdal-min/lib/pkgconfig" || true
+          echo "GDAL_PREFIX=$GDAL_PREFIX" >> "$GITHUB_ENV"
+
+          echo "Installed binaries:"
+          ls -la "$GDAL_PREFIX/bin" || true
+          echo "Installed pkgconfig:"
+          ls -la "$GDAL_PREFIX/lib/pkgconfig" || true
+
+          if [ ! -f "$GDAL_PREFIX/bin/ogrinfo.exe" ]; then
+            echo "ERROR: ogrinfo.exe not produced by GDAL build"
+            exit 1
+          fi
 
       - name: Configure (release)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          GDAL_PREFIX="$PWD/_deps/gdal-min"
-          export PKG_CONFIG_PATH="$GDAL_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG_PATH="${{ env.GDAL_PREFIX }}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -220,19 +243,24 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Package portable zip (minimal GDAL)
+      - name: Package portable zip (includes ogrinfo + minimal GDAL)
         shell: msys2 {0}
         run: |
           set -euo pipefail
-          GDAL_PREFIX="$PWD/_deps/gdal-min"
+
+          GDAL_PREFIX="${{ env.GDAL_PREFIX }}"
 
           rm -rf dist dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
           mkdir -p dist/share/dist2land dist/share/certs dist/share/gdal dist/share/proj
 
+          # App + plugin
           cp -f build/dist2land.exe dist/dist2land.exe
           cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
 
-          # Ship minimal GDAL DLL(s)
+          # ogrinfo tool
+          cp -f "$GDAL_PREFIX/bin/ogrinfo.exe" dist/ogrinfo.exe
+
+          # Minimal GDAL runtime (libgdal + any sibling DLLs installed into prefix/bin)
           cp -f "$GDAL_PREFIX/bin/"*.dll dist/ || true
 
           # Providers config
@@ -242,10 +270,15 @@ jobs:
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          # PROJ data (from MSYS2 package)
+          # PROJ data (proj.db must be present)
           cp -r /mingw64/share/proj/* dist/share/proj/ || true
+          if [ ! -f dist/share/proj/proj.db ]; then
+            echo "ERROR: proj.db missing in dist/share/proj"
+            ls -la dist/share/proj || true
+            exit 1
+          fi
 
-          # GDAL data (from *our* minimal GDAL install)
+          # GDAL data from our minimal GDAL install, if present
           if [ -d "$GDAL_PREFIX/share/gdal" ]; then
             cp -r "$GDAL_PREFIX/share/gdal/"* dist/share/gdal/ || true
           fi
@@ -254,8 +287,10 @@ jobs:
           cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
           copy_deps_recursive () {
+            local GDAL_PREFIX_LOCAL="$1"; shift
             local -a queue=("$@")
             local -A seen=()
+
             while ((${#queue[@]})); do
               local bin="${queue[0]}"
               queue=("${queue[@]:1}")
@@ -270,15 +305,18 @@ jobs:
                   cp -f "$d" dist/
                   queue+=("dist/$base")
                 fi
-              done < <(ldd "$bin" | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$' | sort -u)
+              done < <(
+                ldd "$bin" | awk '{print $3}' | grep -E \
+                  "^/mingw64/bin/.*\.dll$|^${GDAL_PREFIX_LOCAL}/bin/.*\.dll$" | sort -u
+              )
             done
           }
 
-          # Ensure we recurse from exe + plugin + gdal DLL(s)
-          GDAL_DLLS=(dist/libgdal*.dll dist/gdal*.dll dist/ogr*.dll)
-          copy_deps_recursive dist/dist2land.exe dist/dist2land_gdal.dll "${GDAL_DLLS[@]}"
+          # Seed recursion from app + plugin + ogrinfo + any libgdal in dist
+          SEEDS=(dist/dist2land.exe dist/dist2land_gdal.dll dist/ogrinfo.exe)
+          for f in dist/libgdal*.dll; do [ -f "$f" ] && SEEDS+=("$f"); done
+          copy_deps_recursive "$GDAL_PREFIX" "${SEEDS[@]}"
 
-          # Hard fail if any dependency is still missing
           check_no_missing () {
             local f="$1"
             [ -f "$f" ] || return 0
@@ -291,6 +329,7 @@ jobs:
 
           check_no_missing dist/dist2land.exe
           check_no_missing dist/dist2land_gdal.dll
+          check_no_missing dist/ogrinfo.exe
           for f in dist/libgdal*.dll; do check_no_missing "$f"; done
 
           ( cd dist && cmake -E tar cfv ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip --format=zip . )
@@ -299,16 +338,14 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
+
           rm -rf unpack
           mkdir -p unpack
           cd unpack
           cmake -E tar xvf ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
-          export PROJ_LIB="$PWD/share/proj"
-          export GDAL_DATA="$PWD/share/gdal"
-          export CURL_CA_BUNDLE="$PWD/share/certs/ca-bundle.crt"
-          export SSL_CERT_FILE="$PWD/share/certs/ca-bundle.crt"
-          export GDAL_DRIVER_PATH=
+          # Realistic user run: no MSYS paths, rely on your win_runtime() to set native env.
+          ./ogrinfo.exe --version
 
           ./dist2land.exe help
           ./dist2land.exe providers
