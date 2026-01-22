@@ -218,17 +218,30 @@ jobs:
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          copy_deps () {
-            local bin="$1"
-            [ -f "$bin" ] || return 0
-            ldd "$bin" | awk '{print $3}' | grep -E "^/mingw64/bin/.*\.dll$" | sort -u | while read -r d; do
-              [ -f "$d" ] && cp -f "$d" dist/
+          copy_deps_recursive () {
+            local -a queue=("$@")
+            local -A seen=()
+          
+            while ((${#queue[@]})); do
+            local bin="${queue[0]}"
+            queue=("${queue[@]:1}")
+            [ -f "$bin" ] || continue
+            [ -n "${seen["$bin"]+x}" ] && continue
+            seen["$bin"]=1
+            
+            while read -r d; do
+              [ -f "$d" ] || continue
+              local base="$(basename "$d")"
+              if [ ! -f "dist/$base" ]; then
+                cp -f "$d" dist/
+                queue+=("dist/$base")
+              fi
+            done < <(ldd "$bin" | awk '{print $3}' | grep -E '^/mingw64/bin/.*\.dll$' | sort -u)
             done
           }
 
           # Copy dependent DLLs for exe + plugin
-          copy_deps dist/dist2land.exe
-          copy_deps dist/dist2land_gdal.dll
+          copy_deps_recursive dist/dist2land.exe dist/dist2land_gdal.dll
 
           # PROJ data
           mkdir -p dist/share/proj
