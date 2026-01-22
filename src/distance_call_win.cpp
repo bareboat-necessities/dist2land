@@ -2,12 +2,14 @@
 
 #ifdef _WIN32
 
+#include "dist2land_gdal_plugin_api.h"
+
+#define NOMINMAX
 #include <windows.h>
+
+#include <filesystem>
 #include <stdexcept>
 #include <string>
-#include <filesystem>
-#include <vector>
-#include <cstring>
 
 namespace {
 
@@ -28,14 +30,6 @@ static std::string winerr_last_error(DWORD e) {
   if (msg) LocalFree(msg);
   return s;
 }
-
-// Must match the plugin’s exported struct exactly (C ABI / POD).
-struct Dist2LandQueryOut {
-  double geodesic_m;
-  double land_lat_deg;
-  double land_lon_deg;
-  int    in_land; // 0/1
-};
 
 using query_fn_t = int (*)(double lat_deg,
                            double lon_deg,
@@ -58,13 +52,14 @@ static void ensure_loaded() {
     DWORD e = GetLastError();
     throw std::runtime_error(
       "Failed to load dist2land_gdal.dll from: " + std::filesystem::path(dll_path).string() +
-      " (Win32 error " + std::to_string(e) + ": " + winerr_last_error(e) + ")"
+      " (Win32 error " + std::to_string(e) + ": " + winerr_last_error(e) + "). "
+      "This almost always means a dependent DLL is missing. Run: ldd dist2land_gdal.dll"
     );
   }
 
-  FARPROC p = GetProcAddress(g_mod, "dist2land_gdal_query_geodesic");
+  FARPROC p = GetProcAddress(g_mod, kDist2LandGdalProcName);
   if (!p) {
-    throw std::runtime_error("dist2land_gdal.dll missing export dist2land_gdal_query_geodesic");
+    throw std::runtime_error(std::string("dist2land_gdal.dll missing export: ") + kDist2LandGdalProcName);
   }
 
   g_query = reinterpret_cast<query_fn_t>(p);
@@ -81,17 +76,16 @@ DistanceQueryResult distance_query_geodesic(double lat_deg, double lon_deg,
   char err[1024];
   err[0] = 0;
 
-  // Use UTF-8 for cross-boundary safety.
   const std::string shp_u8 = shp_path.u8string();
 
-  int ok = g_query(lat_deg, lon_deg,
-                  provider_id.c_str(),
-                  shp_u8.c_str(),
-                  &out,
-                  err, sizeof(err));
+  const int rc = g_query(lat_deg, lon_deg,
+                        provider_id.c_str(),
+                        shp_u8.c_str(),
+                        &out,
+                        err, sizeof(err));
 
-  if (!ok) {
-    std::string msg = err[0] ? std::string(err) : std::string("Unknown plugin error");
+  if (rc != 0) {
+    std::string msg = err[0] ? std::string(err) : std::string("GDAL plugin call failed");
     throw std::runtime_error(msg);
   }
 

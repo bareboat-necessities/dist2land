@@ -1,7 +1,9 @@
 #include "ogr_distance.h"
+
 #include <gdal.h>
 #include <ogrsf_frmts.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -41,7 +43,6 @@ static void update_best_on_lines(const OGRGeometry* geom,
     return;
   }
 
-  // MultiLineString inherits OGRGeometryCollection
   if (gt == wkbMultiLineString || gt == wkbGeometryCollection) {
     const auto* coll = dynamic_cast<const OGRGeometryCollection*>(geom);
     if (!coll) return;
@@ -52,12 +53,12 @@ static void update_best_on_lines(const OGRGeometry* geom,
     return;
   }
 
-  // Unexpected type: ignore (boundary() from polygons should yield lines)
+  // ignore
 }
 
-DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
-                                         const std::string& provider_id,
-                                         const std::filesystem::path& shp_path) {
+DistanceQueryResult distance_query_geodesic_ogr(double lat_deg, double lon_deg,
+                                               const std::string& provider_id,
+                                               const std::filesystem::path& shp_path) {
   GDALAllRegister();
 
   GDALDataset* ds = (GDALDataset*)GDALOpenEx(
@@ -70,7 +71,7 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
   OGRLayer* layer = ds->GetLayer(0);
   if (!layer) { GDALClose(ds); throw std::runtime_error("No layer in shapefile"); }
 
-  // Build CRS + coordinate transforms
+  // CRS transforms: WGS84 <-> local AEQD (meters)
   OGRSpatialReference wgs84;
   wgs84.importFromEPSG(4326);
 
@@ -88,7 +89,8 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
     if (toAEQD) OCTDestroyCoordinateTransformation(toAEQD);
     if (toWGS)  OCTDestroyCoordinateTransformation(toWGS);
     GDALClose(ds);
-    throw std::runtime_error("Failed to create coordinate transformations (WGS84 <-> AEQD)");
+    throw std::runtime_error("Failed to create coordinate transformations (WGS84 <-> AEQD). "
+                             "On Windows, ensure PROJ_LIB is set and proj data is bundled.");
   }
 
   // Query point
@@ -102,12 +104,13 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
   }
 
   double best = std::numeric_limits<double>::infinity();
-  OGRPoint best_pt_xy; // AEQD coords for nearest land point
+  OGRPoint best_pt_xy;
+  bool in_land = false;
 
   double radius_m = 10'000.0;
   const double max_radius_m = 20'000'000.0;
 
-  auto scanWindow = [&](double xmin, double ymin, double xmax, double ymax) {
+  auto scanWindow = [&](double xmin, double ymin, double xmax, double ymax) -> bool {
     layer->SetSpatialFilterRect(xmin, ymin, xmax, ymax);
     layer->ResetReading();
 
@@ -116,7 +119,6 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
       OGRGeometry* g = feat->GetGeometryRef();
       if (!g) { OGRFeature::DestroyFeature(feat); continue; }
 
-      // Work in AEQD meters
       OGRGeometry* g_xy = g->clone();
       if (g_xy->transform(toAEQD) != OGRERR_NONE) {
         OGRGeometryFactory::destroyGeometry(g_xy);
@@ -124,19 +126,18 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
         continue;
       }
 
-      // If point is on/inside land polygon, distance is 0 and nearest land point is the query point
-      // (Distance(point, polygon) == 0 covers inside and boundary contact)
+      // Inside/on land => distance 0, nearest land point = query point
       const double d_poly = p_xy.Distance(g_xy);
-      if (d_poly == 0.0) {
+      if (d_poly <= 1e-9) {
         best = 0.0;
         best_pt_xy = p_xy;
+        in_land = true;
         OGRGeometryFactory::destroyGeometry(g_xy);
         OGRFeature::DestroyFeature(feat);
-        return; // early exit from scanWindow
+        return true; // can stop scanning
       }
 
-      // Nearest point to a polygon (when outside) lies on its boundary
-      OGRGeometry* bnd = g_xy->Boundary(); // new geometry
+      OGRGeometry* bnd = g_xy->Boundary();
       if (bnd) {
         update_best_on_lines(bnd, p_xy, best, best_pt_xy);
         OGRGeometryFactory::destroyGeometry(bnd);
@@ -145,33 +146,34 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
       OGRGeometryFactory::destroyGeometry(g_xy);
       OGRFeature::DestroyFeature(feat);
     }
+    return false;
   };
 
   while (radius_m <= max_radius_m) {
     double dlat, dlon;
     metersToDegWindow(lat_deg, radius_m, dlat, dlon);
 
-    double ymin = lat_deg - dlat;
-    double ymax = lat_deg + dlat;
+    const double ymin = lat_deg - dlat;
+    const double ymax = lat_deg + dlat;
     double xmin = lon_deg - dlon;
     double xmax = lon_deg + dlon;
 
-    // Handle antimeridian by splitting
+    bool hit_zero = false;
+
+    // Antimeridian handling
     if (xmin < -180.0) {
-      scanWindow(xmin + 360.0, ymin, 180.0, ymax);
-      if (best == 0.0) break;
-      scanWindow(-180.0, ymin, xmax, ymax);
+      hit_zero = scanWindow(xmin + 360.0, ymin, 180.0, ymax);
+      if (!hit_zero) hit_zero = scanWindow(-180.0, ymin, xmax, ymax);
     } else if (xmax > 180.0) {
-      scanWindow(xmin, ymin, 180.0, ymax);
-      if (best == 0.0) break;
-      scanWindow(-180.0, ymin, xmax - 360.0, ymax);
+      hit_zero = scanWindow(xmin, ymin, 180.0, ymax);
+      if (!hit_zero) hit_zero = scanWindow(-180.0, ymin, xmax - 360.0, ymax);
     } else {
-      scanWindow(xmin, ymin, xmax, ymax);
+      hit_zero = scanWindow(xmin, ymin, xmax, ymax);
     }
 
     layer->SetSpatialFilter(nullptr);
 
-    if (best == 0.0) break;
+    if (hit_zero) break;
     if (std::isfinite(best) && best <= radius_m * 1.2) break;
 
     radius_m *= 2.0;
@@ -186,7 +188,7 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
     throw std::runtime_error("No distance computed (bad dataset?)");
   }
 
-  // Convert best point back to WGS84 lat/lon
+  // Convert best point back to WGS84
   OGRPoint land_wgs = best_pt_xy;
   if (land_wgs.transform(toWGS) != OGRERR_NONE) {
     OCTDestroyCoordinateTransformation(toAEQD);
@@ -202,11 +204,12 @@ DistanceResult distance_to_land_geodesic(double lat_deg, double lon_deg,
   OCTDestroyCoordinateTransformation(toWGS);
   GDALClose(ds);
 
-  DistanceResult out;
+  DistanceQueryResult out;
+  out.provider_id = provider_id;
+  out.shp_path = shp_path;
   out.geodesic_m = best;
   out.land_lat_deg = land_lat;
   out.land_lon_deg = land_lon;
-  out.provider_id = provider_id;
-  out.shp_path = shp_path;
+  out.in_land = in_land;
   return out;
 }
