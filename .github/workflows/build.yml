@@ -174,23 +174,23 @@ jobs:
           mkdir -p dist/share/gdal
           cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
 
-          cat > dist/run.bat <<'EOF'
+          cat > dist/dist2land.bat <<'EOF'
           @echo off
           setlocal
           set "DIR=%~dp0"
-
-          rem Keep PATH clean.
+          
+          rem Ensure we load DLLs from this folder first.
           set "PATH=%DIR%;%SystemRoot%\System32;%SystemRoot%"
-
-          rem Per-user writable base (data gets downloaded on first setup).
+          
+          rem Writable per-user storage (datasets downloaded by `setup`)
           set "APPBASE=%LOCALAPPDATA%\dist2land"
           set "HOME=%APPBASE%"
           set "XDG_CACHE_HOME=%APPBASE%\cache"
-
-          rem Bundle data directories for PROJ/GDAL
+          
+          rem Bundle data directories for PROJ/GDAL (must be set before GDAL loads)
           set "PROJ_LIB=%DIR%share\proj"
           set "GDAL_DATA=%DIR%share\gdal"
-
+          
           "%DIR%dist2land.exe" %*
           endlocal
           EOF
