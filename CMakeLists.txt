@@ -4,11 +4,11 @@ project(dist2land LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
 find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
-find_package(GDAL REQUIRED)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
 
 add_executable(dist2land
   src/main.cpp
@@ -21,13 +21,12 @@ add_executable(dist2land
 )
 
 target_include_directories(dist2land PRIVATE
-  ${GDAL_INCLUDE_DIR}
-  ${LibArchive_INCLUDE_DIRS}
   src
+  ${LibArchive_INCLUDE_DIRS}
 )
 
 target_link_libraries(dist2land PRIVATE
-  ${GDAL_LIBRARY}
+  PkgConfig::GDAL
   CURL::libcurl
   ${LibArchive_LIBRARIES}
 )
