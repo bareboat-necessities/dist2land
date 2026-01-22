@@ -2,7 +2,6 @@
 
 #include "distance_iface.h"
 
-#define NOMINMAX
 #include <windows.h>
 
 #include <filesystem>
@@ -15,12 +14,9 @@ static std::string win_last_error_string(DWORD err) {
   LPSTR msg = nullptr;
   DWORD n = FormatMessageA(
       FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-      nullptr,
-      err,
+      nullptr, err,
       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-      (LPSTR)&msg,
-      0,
-      nullptr);
+      (LPSTR)&msg, 0, nullptr);
   std::string out = (n && msg) ? std::string(msg, msg + n) : ("Win32 error " + std::to_string(err));
   if (msg) LocalFree(msg);
   while (!out.empty() && (out.back() == '\r' || out.back() == '\n')) out.pop_back();
@@ -33,11 +29,10 @@ static std::filesystem::path exe_dir() {
   DWORD n = GetModuleFileNameW(nullptr, buf.data(), (DWORD)buf.size());
   if (n == 0 || n >= buf.size()) return std::filesystem::path(L".");
   buf.resize(n);
-  std::filesystem::path p(buf);
-  return p.parent_path();
+  return std::filesystem::path(buf).parent_path();
 }
 
-// C++20: u8string() returns std::u8string (char8_t). Convert to byte string for C ABI.
+// C++20: path::u8string() is std::u8string (char8_t). Convert to bytes for C ABI.
 static std::string path_to_utf8_bytes(const std::filesystem::path& p) {
   std::u8string u8 = p.u8string();
   return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
@@ -61,15 +56,20 @@ struct GdalPlugin {
   GdalPlugin() {
     dll_path = exe_dir() / "dist2land_gdal.dll";
 
-    h = LoadLibraryW(dll_path.wstring().c_str());
+    // Critical: ensure the loader resolves *dependencies of the DLL* from the DLL's directory first.
+    // This avoids accidentally pulling a different GDAL stack from PATH (QGIS/OSGeo4W/MSYS2, etc).
+    h = LoadLibraryExW(dll_path.wstring().c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!h) {
       DWORD e = GetLastError();
       std::ostringstream oss;
       oss << "Failed to load dist2land_gdal.dll from: " << dll_path.string()
-          << " (LoadLibraryW error " << e << ": " << win_last_error_string(e) << ")";
+          << " (LoadLibraryExW error " << e << ": " << win_last_error_string(e) << ")";
       if (e == 126) {
-        oss << " (error 126 usually means a dependency DLL is missing; ensure all /mingw64/bin/*.dll "
-               "dependencies were copied next to the exe)";
+        oss << " (error 126 usually means a dependency DLL is missing)";
+      } else if (e == 1114) {
+        oss << " (error 1114 means a dependency DLL's initialization failed; "
+               "this is commonly caused by loading the wrong GDAL/PROJ/CURL stack from PATH, "
+               "or a mismatched dependency set in the folder)";
       }
       throw std::runtime_error(oss.str());
     }
