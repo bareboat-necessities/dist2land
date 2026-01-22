@@ -40,14 +40,28 @@ jobs:
         run: |
           cmake --build build -j
 
+      - name: Smoke test (Linux)
+        run: |
+          set -euo pipefail
+          ./build/dist2land help
+          ./build/dist2land providers
+          if ./build/dist2land setup 2>err.txt; then exit 1; fi
+          grep -qi "setup requires --provider" err.txt
+          if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
+          grep -qiE "No providers installed|Providers config not found|Provider.*not installed" err2.txt
+
       - name: Package
         run: |
           set -euo pipefail
           rm -rf dist
-          mkdir -p dist
+          mkdir -p dist/share/dist2land
+
           cp -f build/dist2land dist/
+          cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
+
           cp -f README.md dist/ || true
           cp -f LICENSE dist/ || true
+
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz -C dist .
 
       - name: Upload artifact
@@ -85,14 +99,28 @@ jobs:
         run: |
           cmake --build build -j
 
+      - name: Smoke test (Linux)
+        run: |
+          set -euo pipefail
+          ./build/dist2land help
+          ./build/dist2land providers
+          if ./build/dist2land setup 2>err.txt; then exit 1; fi
+          grep -qi "setup requires --provider" err.txt
+          if ./build/dist2land distance --lat 36.84 --lon -122.42 2>err2.txt; then exit 1; fi
+          grep -qiE "No providers installed|Providers config not found|Provider.*not installed" err2.txt
+
       - name: Package
         run: |
           set -euo pipefail
           rm -rf dist
-          mkdir -p dist
+          mkdir -p dist/share/dist2land
+
           cp -f build/dist2land dist/
+          cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
+
           cp -f README.md dist/ || true
           cp -f LICENSE dist/ || true
+
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz -C dist .
 
       - name: Upload artifact
@@ -146,12 +174,12 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Package portable zip
+      - name: Package portable zip (includes providers.ini)
         shell: msys2 {0}
         run: |
           set -euo pipefail
           rm -rf dist dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
-          mkdir -p dist
+          mkdir -p dist/share/dist2land
 
           cp -f build/dist2land.exe dist/dist2land.exe
 
@@ -168,8 +196,12 @@ jobs:
           fi
           cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
 
-          cp -f README.md dist/ || true
-          cp -f LICENSE dist/ || true
+          # Providers config (no hardcoded URLs)
+          cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
+
+          # Optional docs (don’t fail if absent)
+          [ -f README.md ] && cp -f README.md dist/ || true
+          [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
           copy_deps () {
             local bin="$1"
@@ -223,7 +255,7 @@ jobs:
             exit 1
           fi
           cat err2.txt
-          grep -qi "No providers installed" err2.txt
+          grep -qiE "No providers installed|Providers config not found|Provider.*not installed" err2.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
