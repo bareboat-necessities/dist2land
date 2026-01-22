@@ -37,20 +37,11 @@ static std::filesystem::path exe_dir() {
   return p.parent_path();
 }
 
-// C++20: u8string() is std::u8string (char8_t). Convert to byte string for C ABI.
+// C++20: u8string() returns std::u8string (char8_t). Convert to byte string for C ABI.
 static std::string path_to_utf8_bytes(const std::filesystem::path& p) {
   std::u8string u8 = p.u8string();
   return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
 }
-
-using DistFnV1 = int (*)(const char* shp_path,
-                         const char* provider_id,
-                         double lat_deg, double lon_deg,
-                         double* geodesic_m,
-                         double* land_lat_deg,
-                         double* land_lon_deg,
-                         char* errbuf,
-                         int errbuf_cap);
 
 using DistFnV2 = int (*)(const char* shp_path,
                          const char* provider_id,
@@ -64,28 +55,30 @@ using DistFnV2 = int (*)(const char* shp_path,
 
 struct GdalPlugin {
   HMODULE h = nullptr;
-  DistFnV2 fn2 = nullptr;
-  DistFnV1 fn1 = nullptr;
+  DistFnV2 fn = nullptr;
   std::filesystem::path dll_path;
 
   GdalPlugin() {
     dll_path = exe_dir() / "dist2land_gdal.dll";
+
     h = LoadLibraryW(dll_path.wstring().c_str());
     if (!h) {
       DWORD e = GetLastError();
       std::ostringstream oss;
       oss << "Failed to load dist2land_gdal.dll from: " << dll_path.string()
           << " (LoadLibraryW error " << e << ": " << win_last_error_string(e) << ")";
+      if (e == 126) {
+        oss << " (error 126 usually means a dependency DLL is missing; ensure all /mingw64/bin/*.dll "
+               "dependencies were copied next to the exe)";
+      }
       throw std::runtime_error(oss.str());
     }
 
-    fn2 = reinterpret_cast<DistFnV2>(GetProcAddress(h, "dist2land_gdal_distance_v2"));
-    fn1 = reinterpret_cast<DistFnV1>(GetProcAddress(h, "dist2land_gdal_distance"));
-
-    if (!fn2 && !fn1) {
+    fn = reinterpret_cast<DistFnV2>(GetProcAddress(h, "dist2land_gdal_distance_v2"));
+    if (!fn) {
       DWORD e = GetLastError();
       std::ostringstream oss;
-      oss << "dist2land_gdal.dll missing symbol dist2land_gdal_distance[_v2]"
+      oss << "dist2land_gdal.dll missing required symbol: dist2land_gdal_distance_v2"
           << " (GetProcAddress error " << e << ": " << win_last_error_string(e) << ")";
       FreeLibrary(h);
       h = nullptr;
@@ -118,18 +111,9 @@ DistanceQueryResult distance_query_geodesic(double lat_deg, double lon_deg,
 
   const char* prov_c = provider_id.empty() ? nullptr : provider_id.c_str();
 
-  int rc = 0;
-  if (p.fn2) {
-    rc = p.fn2(shp_u8.c_str(), prov_c, lat_deg, lon_deg,
-               &geodesic_m, &land_lat, &land_lon, &in_land_i,
-               err, (int)sizeof(err));
-  } else {
-    rc = p.fn1(shp_u8.c_str(), prov_c, lat_deg, lon_deg,
-               &geodesic_m, &land_lat, &land_lon,
-               err, (int)sizeof(err));
-    // Best-effort fallback: treat distance==0 as in_land.
-    in_land_i = (geodesic_m == 0.0) ? 1 : 0;
-  }
+  int rc = p.fn(shp_u8.c_str(), prov_c, lat_deg, lon_deg,
+                &geodesic_m, &land_lat, &land_lon, &in_land_i,
+                err, (int)sizeof(err));
 
   if (rc != 0) {
     std::string msg = (err[0] != '\0') ? std::string(err) : "Unknown error from GDAL backend";
