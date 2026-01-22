@@ -14,8 +14,10 @@ add_executable(dist2land
   src/providers.cpp
   src/http_download.cpp
   src/archive_extract.cpp
-  src/ogr_distance.cpp
   src/util.cpp
+  src/win_runtime.cpp
+  src/distance_call_win.cpp
+  src/distance_call_posix.cpp
 )
 
 target_include_directories(dist2land PRIVATE
@@ -23,21 +25,32 @@ target_include_directories(dist2land PRIVATE
   ${LibArchive_INCLUDE_DIRS}
 )
 
-# --- GDAL via pkg-config ---
-# On Windows + MSYS2, IMPORTED_TARGET often contains POSIX paths like /mingw64/include
-# which CMake treats as non-existent. So:
-#  - Non-Windows: use IMPORTED_TARGET (cleanest)
-#  - Windows: use raw pkg-config vars + convert MSYS paths via cygpath
+target_link_libraries(dist2land PRIVATE
+  CURL::libcurl
+  ${LibArchive_LIBRARIES}
+)
+
+if (MSVC)
+  target_compile_definitions(dist2land PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# --- GDAL linkage ---
 if (WIN32)
+  # Build a plugin DLL that links to GDAL, so dist2land.exe itself does NOT load GDAL at startup.
+  add_library(dist2land_gdal SHARED
+    src/dist2land_gdal_plugin.cpp
+    src/ogr_distance.cpp
+  )
+  target_include_directories(dist2land_gdal PRIVATE src)
+
+  # pkg-config + path translation you already used
   pkg_check_modules(GDAL REQUIRED gdal)
 
   function(msys_to_native out in)
     if ("${in}" MATCHES "^/")
-      execute_process(
-        COMMAND cygpath -m "${in}"
-        OUTPUT_VARIABLE _p
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
+      execute_process(COMMAND cygpath -m "${in}"
+                      OUTPUT_VARIABLE _p
+                      OUTPUT_STRIP_TRAILING_WHITESPACE)
       set(${out} "${_p}" PARENT_SCOPE)
     else()
       set(${out} "${in}" PARENT_SCOPE)
@@ -56,21 +69,15 @@ if (WIN32)
     list(APPEND GDAL_LIBRARY_DIRS_NATIVE "${nd}")
   endforeach()
 
-  target_include_directories(dist2land PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
-  target_link_directories(dist2land PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
-  target_compile_options(dist2land PRIVATE ${GDAL_CFLAGS_OTHER})
-  target_link_options(dist2land PRIVATE ${GDAL_LDFLAGS_OTHER})
-  target_link_libraries(dist2land PRIVATE ${GDAL_LIBRARIES})
+  target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
+  target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
+  target_compile_options(dist2land_gdal PRIVATE ${GDAL_CFLAGS_OTHER})
+  target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
+  target_link_libraries(dist2land_gdal PRIVATE ${GDAL_LIBRARIES})
+
 else()
+  # Non-Windows: link GDAL directly into the executable
   pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
+  target_sources(dist2land PRIVATE src/ogr_distance.cpp)
   target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)
-endif()
-
-target_link_libraries(dist2land PRIVATE
-  CURL::libcurl
-  ${LibArchive_LIBRARIES}
-)
-
-if (MSVC)
-  target_compile_definitions(dist2land PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()

@@ -3,7 +3,8 @@
 #include "app_paths.h"
 #include "http_download.h"
 #include "archive_extract.h"
-#include "ogr_distance.h"
+#include "distance_iface.h"
+#include "win_runtime.h"
 
 #include <iostream>
 #include <filesystem>
@@ -196,7 +197,7 @@ static void cmd_distance(const ArgvView& av) {
   const auto shp = provider_shapefile_path(p);
 
   // Find nearest land point by geodesic (AEQD) and return its coordinates.
-  auto r = distance_to_land_geodesic(lat, lon, p.id, shp);
+  auto r = distance_query_geodesic(lat, lon, p.id, shp);
 
   double d_m = 0.0;
   if (metric == "geodesic") {
@@ -227,7 +228,11 @@ static void cmd_distance(const ArgvView& av) {
 }
 
 int main(int argc, char** argv) {
+  win_prepare_runtime();
   try {
+    if (!provider_installed(p)) {
+      throw std::runtime_error("Provider '" + p.id + "' not installed. Run: dist2land setup --provider " + p.id);
+    }
     ArgvView av(argc, argv);
     if (argc < 2) { print_usage(); return 2; }
 

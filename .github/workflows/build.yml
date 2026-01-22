@@ -153,6 +153,7 @@ jobs:
           mkdir -p dist
 
           cp -f build/dist2land.exe dist/dist2land.exe
+          cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
           cp -f README.md dist/ || true
           cp -f LICENSE dist/ || true
 
