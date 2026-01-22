@@ -43,17 +43,26 @@ if (WIN32)
   )
   target_include_directories(dist2land_gdal PRIVATE src)
 
-  # pkg-config + path translation you already used
+  # Ensure the DLL name is exactly: dist2land_gdal.dll (no "lib" prefix on MinGW)
+  set_target_properties(dist2land_gdal PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "dist2land_gdal"
+  )
+
+  # Use pkg-config to locate GDAL. (MSYS2 provides gdal.pc)
   pkg_check_modules(GDAL REQUIRED gdal)
 
-  function(msys_to_native out in)
-    if ("${in}" MATCHES "^/")
-      execute_process(COMMAND cygpath -m "${in}"
-                      OUTPUT_VARIABLE _p
-                      OUTPUT_STRIP_TRAILING_WHITESPACE)
+  # Convert MSYS paths (/mingw64/...) to native (C:/msys64/mingw64/...) for CMake/MinGW
+  function(msys_to_native out inpath)
+    if ("${inpath}" MATCHES "^/")
+      execute_process(
+        COMMAND cygpath -m "${inpath}"
+        OUTPUT_VARIABLE _p
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
       set(${out} "${_p}" PARENT_SCOPE)
     else()
-      set(${out} "${in}" PARENT_SCOPE)
+      set(${out} "${inpath}" PARENT_SCOPE)
     endif()
   endfunction()
 
@@ -70,9 +79,19 @@ if (WIN32)
   endforeach()
 
   target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
-  target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
-  target_compile_options(dist2land_gdal PRIVATE ${GDAL_CFLAGS_OTHER})
-  target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
+  if (GDAL_LIBRARY_DIRS_NATIVE)
+    target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
+  endif()
+
+  # pkg-config may provide extra compile/link flags
+  if (GDAL_CFLAGS_OTHER)
+    target_compile_options(dist2land_gdal PRIVATE ${GDAL_CFLAGS_OTHER})
+  endif()
+  if (GDAL_LDFLAGS_OTHER)
+    target_link_options(dist2land_gdal PRIVATE ${GDAL_LDFLAGS_OTHER})
+  endif()
+
+  # Link GDAL libraries listed by pkg-config
   target_link_libraries(dist2land_gdal PRIVATE ${GDAL_LIBRARIES})
 
 else()
