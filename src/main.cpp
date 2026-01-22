@@ -193,7 +193,9 @@ static void cmd_distance(const ArgvView& av) {
   } else {
     p = provider_by_id(prov);
   }
-
+  if (!provider_installed(p)) {
+    throw std::runtime_error("Provider '" + p.id + "' not installed. Run: dist2land setup --provider " + p.id);
+  }
   const auto shp = provider_shapefile_path(p);
 
   // Find nearest land point by geodesic (AEQD) and return its coordinates.
@@ -230,9 +232,6 @@ static void cmd_distance(const ArgvView& av) {
 int main(int argc, char** argv) {
   win_prepare_runtime();
   try {
-    if (!provider_installed(p)) {
-      throw std::runtime_error("Provider '" + p.id + "' not installed. Run: dist2land setup --provider " + p.id);
-    }
     ArgvView av(argc, argv);
     if (argc < 2) { print_usage(); return 2; }
 
