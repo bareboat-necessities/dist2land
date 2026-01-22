@@ -122,6 +122,7 @@ jobs:
             mingw-w64-x86_64-libarchive
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-geos
+            mingw-w64-x86_64-ca-certificates
             unzip
             p7zip
             git
@@ -145,7 +146,7 @@ jobs:
         run: |
           cmake --build build -j
 
-      - name: Package portable zip (includes run.bat)
+      - name: Package portable zip
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -153,11 +154,23 @@ jobs:
           mkdir -p dist
 
           cp -f build/dist2land.exe dist/dist2land.exe
-          cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
+
+          # Plugin DLL name can vary (lib prefix) depending on toolchain defaults
+          PLUGIN_DLL=""
+          if [ -f build/dist2land_gdal.dll ]; then
+            PLUGIN_DLL="build/dist2land_gdal.dll"
+          elif [ -f build/libdist2land_gdal.dll ]; then
+            PLUGIN_DLL="build/libdist2land_gdal.dll"
+          else
+            echo "ERROR: dist2land_gdal plugin DLL not found in build/"
+            ls -la build
+            exit 1
+          fi
+          cp -f "$PLUGIN_DLL" dist/dist2land_gdal.dll
+
           cp -f README.md dist/ || true
           cp -f LICENSE dist/ || true
 
-          # Copy dependent DLLs for the exe (MinGW runtime + GDAL/PROJ/GEOS/CURL/etc)
           copy_deps () {
             local bin="$1"
             [ -f "$bin" ] || return 0
@@ -165,9 +178,12 @@ jobs:
               [ -f "$d" ] && cp -f "$d" dist/
             done
           }
-          copy_deps build/dist2land.exe
 
-          # PROJ data (needed for CRS transforms, e.g., AEQD)
+          # Copy dependent DLLs for exe + plugin
+          copy_deps dist/dist2land.exe
+          copy_deps dist/dist2land_gdal.dll
+
+          # PROJ data (needed for CRS transforms)
           mkdir -p dist/share/proj
           cp -r /mingw64/share/proj/* dist/share/proj/ || true
 
@@ -175,26 +191,9 @@ jobs:
           mkdir -p dist/share/gdal
           cp -r /mingw64/share/gdal/* dist/share/gdal/ || true
 
-          cat > dist/dist2land.bat <<'EOF'
-          @echo off
-          setlocal
-          set "DIR=%~dp0"
-          
-          rem Ensure we load DLLs from this folder first.
-          set "PATH=%DIR%;%SystemRoot%\System32;%SystemRoot%"
-          
-          rem Writable per-user storage (datasets downloaded by `setup`)
-          set "APPBASE=%LOCALAPPDATA%\dist2land"
-          set "HOME=%APPBASE%"
-          set "XDG_CACHE_HOME=%APPBASE%\cache"
-          
-          rem Bundle data directories for PROJ/GDAL (must be set before GDAL loads)
-          set "PROJ_LIB=%DIR%share\proj"
-          set "GDAL_DATA=%DIR%share\gdal"
-          
-          "%DIR%dist2land.exe" %*
-          endlocal
-          EOF
+          # CA bundle for libcurl/OpenSSL
+          mkdir -p dist/share/certs
+          cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
           7z a dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip ./dist/*
 
@@ -202,8 +201,6 @@ jobs:
         shell: msys2 {0}
         run: |
           set -euo pipefail
-
-          # Enter packaged folder (portable runtime: dlls + share/proj + share/gdal + dist2land_gdal.dll)
           cd dist
 
           echo "== help =="
