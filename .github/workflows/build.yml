@@ -197,6 +197,13 @@ jobs:
 
           7z a dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip ./dist/*
 
+      - name: Smoke test (Windows)
+        shell: msys2 {0}
+        run: |
+          cd dist
+          cmd //c dist2land.bat help
+          cmd //c dist2land.bat providers
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
