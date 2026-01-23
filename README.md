@@ -45,3 +45,13 @@ ogrinfo -ro -so ../../../AppData/Local/dist2land/providers/osm/extracted/land-po
 ogrinfo -ro ../../../AppData/Local/dist2land/providers/osm/extracted/land-polygons-split-4326/land_polygons.shp -sql "CREATE SPATIAL INDEX ON land_polygons"
 ```
 
+## Example output
+
+```
+$ time ./dist2land distance --lat 36.84 --lon -62.42
+404187.590 m 44.65687940 -62.86739060
+provider=osm metric=geodesic shp=C:\Users\17326\AppData\Local\dist2land\providers\osm\extracted\land-polygons-split-4326\land_polygons.shp geodesic_m=404188
+
+real    0m6.634s
+
+```
