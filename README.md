@@ -24,13 +24,13 @@ cmake --build build -j
 ## One-time setup (downloads to cache)
 
 ```bash
-./build/dist2land setup --provider osm
+./dist2land setup --provider osm
 ```
 
 ## Query
 
 ```bash
-./build/dist2land distance --lat 36.84 --lon -62.42
+./dist2land distance --lat 36.84 --lon -62.42
 ```
 
 ## Creating spacial index (Windows)
