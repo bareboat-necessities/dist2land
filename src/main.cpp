@@ -14,6 +14,8 @@
 #include <limits>
 #include <array>
 #include <algorithm>
+#include <sstream>
+#include <cstdio>
 
 static void print_usage() {
   std::cout <<
@@ -27,14 +29,17 @@ Commands:
                     [--provider (auto|osm|gshhg|ne)]
                     [--units (m|km|nm)]
                     [--metric (geodesic|chord|rhumb)]
+                    [--json]
 
 Examples:
   dist2land setup --provider osm
-  dist2land distance --lat 36.84 --lon -62.42 --provider auto
+  dist2land distance --lat 36.84 --lon -122.42 --provider auto
   dist2land distance --lat 0 --lon -30 --metric rhumb --units nm
+  dist2land distance --lat 36.84 --lon -122.42 --json
 
 Output:
   <distance> <units> <land_lat_deg> <land_lon_deg>
+  (or JSON if --json)
 
 Notes:
   - First run: you must download a dataset:
@@ -60,6 +65,35 @@ Performance (optional spatial index for faster queries):
      dist2land distance --lat 0 --lon 0 --provider osm
   (it prints shp=... on stderr).
 )";
+}
+
+static bool has_flag(const ArgvView& av, const std::string& flag) {
+  return std::find(av.args.begin(), av.args.end(), flag) != av.args.end();
+}
+
+static std::string json_escape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (unsigned char c : s) {
+    switch (c) {
+      case '\"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\b': out += "\\b"; break;
+      case '\f': out += "\\f"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (c < 0x20) {
+          char buf[7];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", (unsigned)c);
+          out += buf;
+        } else {
+          out.push_back((char)c);
+        }
+    }
+  }
+  return out;
 }
 
 static double convert_units(double meters, const std::string& units) {
@@ -178,10 +212,17 @@ static void cmd_distance(const ArgvView& av) {
   if (!std::isfinite(lat) || !std::isfinite(lon)) {
     throw std::runtime_error("distance requires --lat and --lon");
   }
+  if (lat < -90.0 || lat > 90.0) {
+    throw std::runtime_error("--lat must be in [-90, 90] degrees");
+  }
+  if (lon < -180.0 || lon > 180.0) {
+    throw std::runtime_error("--lon must be in [-180, 180] degrees");
+  }
 
   const std::string prov   = to_lower(av.get("--provider", "auto"));
   const std::string units  = av.get("--units", "m");
   const std::string metric = to_lower(av.get("--metric", "geodesic"));
+  const bool json          = has_flag(av, "--json");
 
   Provider p;
   if (prov == "auto") {
@@ -214,12 +255,38 @@ static void cmd_distance(const ArgvView& av) {
 
   const double out = convert_units(d_m, units);
 
-  // Output: <distance> <units> <land_lat_deg> <land_lon_deg>
-  std::cout.setf(std::ios::fixed);
-  std::cout << std::setprecision(3) << out << " " << to_lower(units) << " "
-            << std::setprecision(8) << r.land_lat_deg << " "
-            << std::setprecision(8) << r.land_lon_deg
-            << "\n";
+  if (json) {
+    std::ostringstream os;
+    os.setf(std::ios::fixed);
+
+    os << "{";
+    os << "\"query\":{"
+       << "\"lat_deg\":" << std::setprecision(8) << lat << ","
+       << "\"lon_deg\":" << std::setprecision(8) << lon << "},";
+
+    os << "\"result\":{";
+    os << "\"distance\":"     << std::setprecision(3) << out << ",";
+    os << "\"units\":\""      << json_escape(to_lower(units)) << "\",";
+    os << "\"metric\":\""     << json_escape(metric) << "\",";
+    os << "\"provider\":\""   << json_escape(r.provider_id) << "\",";
+    os << "\"land_lat_deg\":" << std::setprecision(8) << r.land_lat_deg << ",";
+    os << "\"land_lon_deg\":" << std::setprecision(8) << r.land_lon_deg << ",";
+    os << "\"distance_m\":"   << std::setprecision(3) << d_m << ",";
+    os << "\"geodesic_m\":"   << std::setprecision(3) << r.geodesic_m << ",";
+    os << "\"in_land\":"      << (r.in_land ? "true" : "false") << ",";
+    os << "\"shp\":\""        << json_escape(r.shp_path.string()) << "\"";
+    os << "}";
+    os << "}\n";
+
+    std::cout << os.str();
+  } else {
+    // Output: <distance> <units> <land_lat_deg> <land_lon_deg>
+    std::cout.setf(std::ios::fixed);
+    std::cout << std::setprecision(3) << out << " " << to_lower(units) << " "
+              << std::setprecision(8) << r.land_lat_deg << " "
+              << std::setprecision(8) << r.land_lon_deg
+              << "\n";
+  }
 
   // Debug/trace to stderr
   std::cerr << "provider=" << r.provider_id
