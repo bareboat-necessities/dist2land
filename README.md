@@ -71,7 +71,7 @@ Create /etc/apt/sources.list.d/dist2land.list:
 
 ```bash
 sudo tee /etc/apt/sources.list.d/dist2land.list >/dev/null <<'EOF'
-deb [trusted=yes] https://github.com/<OWNER>/<REPO>/releases/download/apt/ ./
+deb [trusted=yes] https://github.com/bareboat-necessities/dist2land/releases/download/apt/ ./
 EOF
 ```
 
