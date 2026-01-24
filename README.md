@@ -62,3 +62,22 @@ Json:
 $ ./dist2land distance --lat 36.84 --lon -62.42 --json 2>/dev/null
 {"query":{"lat_deg":36.84000000,"lon_deg":-62.42000000},"result":{"distance":404187.590,"units":"m","metric":"geodesic","provider":"osm","land_lat_deg":44.65687940,"land_lon_deg":-62.86739060,"distance_m":404187.590,"geodesic_m":404187.590,"in_land":false,"shp":"C:\\Users\\17326\\AppData\\Local\\dist2land\\providers\\osm\\extracted\\land-polygons-split-4326\\land_polygons.shp"}}
 ```
+
+## Debian packages install via apt
+
+Add the repo.
+
+Create /etc/apt/sources.list.d/dist2land.list:
+
+```bash
+sudo tee /etc/apt/sources.list.d/dist2land.list >/dev/null <<'EOF'
+deb [trusted=yes] https://github.com/<OWNER>/<REPO>/releases/download/apt/ ./
+EOF
+```
+
+Update + install
+
+```bash
+sudo apt-get update
+sudo apt-get install dist2land
+```
