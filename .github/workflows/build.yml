@@ -21,16 +21,20 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "ARTIFACT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            echo "DEB_VERSION=${GITHUB_REF_NAME#v}-1" >> "$GITHUB_ENV"
           else
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+            echo "DEB_VERSION=0.0.0+sha${GITHUB_SHA::7}-1" >> "$GITHUB_ENV"
           fi
+          echo "DEB_ARCH=$(dpkg --print-architecture)" >> "$GITHUB_ENV"
 
-      - name: Install deps (GDAL + curl + libarchive)
+      - name: Install deps (GDAL + curl + libarchive + deb tools)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build pkg-config g++ \
-            libgdal-dev libcurl4-openssl-dev libarchive-dev
+            libgdal-dev libcurl4-openssl-dev libarchive-dev \
+            dpkg-dev fakeroot apt-utils
 
       - name: Configure (release)
         run: |
@@ -52,7 +56,7 @@ jobs:
           if ./build/dist2land distance --lat 36.84 --lon -62.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
-      - name: Package
+      - name: Package (tar.gz)
         run: |
           set -euo pipefail
           rm -rf dist
@@ -66,11 +70,70 @@ jobs:
 
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz -C dist .
 
+      - name: Package (Debian .deb)
+        run: |
+          set -euo pipefail
+
+          PKG="dist2land"
+          STAGE="pkgroot"
+          rm -rf "$STAGE"
+          mkdir -p \
+            "$STAGE/DEBIAN" \
+            "$STAGE/usr/bin" \
+            "$STAGE/usr/lib/$PKG/share/dist2land" \
+            "$STAGE/usr/share/doc/$PKG"
+
+          # Install the real binary under /usr/lib/dist2land/
+          install -m 0755 build/dist2land "$STAGE/usr/lib/$PKG/$PKG"
+
+          # Wrapper in /usr/bin that sets DIST2LAND_PROVIDERS by default
+          cat > "$STAGE/usr/bin/$PKG" <<'EOF'
+          #!/bin/sh
+          set -e
+          : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
+          : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
+          export DIST2LAND_PROVIDERS
+          exec "$DIST2LAND_HOME/dist2land" "$@"
+          EOF
+          chmod 0755 "$STAGE/usr/bin/$PKG"
+
+          # Providers config (kept adjacent to the real binary, like your tarball layout)
+          install -m 0644 share/dist2land/providers.ini \
+            "$STAGE/usr/lib/$PKG/share/dist2land/providers.ini"
+
+          # Optional docs
+          [ -f README.md ] && install -m 0644 README.md "$STAGE/usr/share/doc/$PKG/README.md" || true
+          [ -f LICENSE ] && install -m 0644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright" || true
+
+          # Compute shared-library dependencies from the real binary
+          DEPENDS="$(dpkg-shlibdeps -O -e "$STAGE/usr/lib/$PKG/$PKG" | sed -n 's/^shlibs:Depends=//p')"
+          [ -n "$DEPENDS" ] || DEPENDS="libc6"
+
+          SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
+
+          cat > "$STAGE/DEBIAN/control" <<EOF
+          Package: $PKG
+          Version: ${{ env.DEB_VERSION }}
+          Section: utils
+          Priority: optional
+          Architecture: ${{ env.DEB_ARCH }}
+          Maintainer: ${{ github.repository }} <noreply@github.com>
+          Depends: $DEPENDS
+          Installed-Size: $SIZE_KB
+          Homepage: https://github.com/${{ github.repository }}
+          Description: dist2land command-line tool
+           Compute distance to land using provider datasets.
+          EOF
+
+          fakeroot dpkg-deb --build "$STAGE" "dist2land_${{ env.DEB_VERSION }}_${{ env.DEB_ARCH }}.deb"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-amd64
-          path: dist2land-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz
+          path: |
+            dist2land-${{ env.ARTIFACT_TAG }}-linux-amd64.tar.gz
+            dist2land_${{ env.DEB_VERSION }}_${{ env.DEB_ARCH }}.deb
 
   linux-arm64:
     name: linux (arm64)
@@ -82,16 +145,20 @@ jobs:
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "ARTIFACT_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+            echo "DEB_VERSION=${GITHUB_REF_NAME#v}-1" >> "$GITHUB_ENV"
           else
             echo "ARTIFACT_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+            echo "DEB_VERSION=0.0.0+sha${GITHUB_SHA::7}-1" >> "$GITHUB_ENV"
           fi
+          echo "DEB_ARCH=$(dpkg --print-architecture)" >> "$GITHUB_ENV"
 
-      - name: Install deps (GDAL + curl + libarchive)
+      - name: Install deps (GDAL + curl + libarchive + deb tools)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             cmake ninja-build pkg-config g++ \
-            libgdal-dev libcurl4-openssl-dev libarchive-dev
+            libgdal-dev libcurl4-openssl-dev libarchive-dev \
+            dpkg-dev fakeroot apt-utils
 
       - name: Configure (release)
         run: |
@@ -113,7 +180,7 @@ jobs:
           if ./build/dist2land distance --lat 36.84 --lon -62.42 2>err2.txt; then exit 1; fi
           grep -qiE "No providers installed|Provider.*not installed" err2.txt
 
-      - name: Package
+      - name: Package (tar.gz)
         run: |
           set -euo pipefail
           rm -rf dist
@@ -127,11 +194,65 @@ jobs:
 
           tar -czf dist2land-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz -C dist .
 
+      - name: Package (Debian .deb)
+        run: |
+          set -euo pipefail
+
+          PKG="dist2land"
+          STAGE="pkgroot"
+          rm -rf "$STAGE"
+          mkdir -p \
+            "$STAGE/DEBIAN" \
+            "$STAGE/usr/bin" \
+            "$STAGE/usr/lib/$PKG/share/dist2land" \
+            "$STAGE/usr/share/doc/$PKG"
+
+          install -m 0755 build/dist2land "$STAGE/usr/lib/$PKG/$PKG"
+
+          cat > "$STAGE/usr/bin/$PKG" <<'EOF'
+          #!/bin/sh
+          set -e
+          : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
+          : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
+          export DIST2LAND_PROVIDERS
+          exec "$DIST2LAND_HOME/dist2land" "$@"
+          EOF
+          chmod 0755 "$STAGE/usr/bin/$PKG"
+
+          install -m 0644 share/dist2land/providers.ini \
+            "$STAGE/usr/lib/$PKG/share/dist2land/providers.ini"
+
+          [ -f README.md ] && install -m 0644 README.md "$STAGE/usr/share/doc/$PKG/README.md" || true
+          [ -f LICENSE ] && install -m 0644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright" || true
+
+          DEPENDS="$(dpkg-shlibdeps -O -e "$STAGE/usr/lib/$PKG/$PKG" | sed -n 's/^shlibs:Depends=//p')"
+          [ -n "$DEPENDS" ] || DEPENDS="libc6"
+
+          SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
+
+          cat > "$STAGE/DEBIAN/control" <<EOF
+          Package: $PKG
+          Version: ${{ env.DEB_VERSION }}
+          Section: utils
+          Priority: optional
+          Architecture: ${{ env.DEB_ARCH }}
+          Maintainer: ${{ github.repository }} <noreply@github.com>
+          Depends: $DEPENDS
+          Installed-Size: $SIZE_KB
+          Homepage: https://github.com/${{ github.repository }}
+          Description: dist2land command-line tool
+           Compute distance to land using provider datasets.
+          EOF
+
+          fakeroot dpkg-deb --build "$STAGE" "dist2land_${{ env.DEB_VERSION }}_${{ env.DEB_ARCH }}.deb"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64
-          path: dist2land-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz
+          path: |
+            dist2land-${{ env.ARTIFACT_TAG }}-linux-arm64.tar.gz
+            dist2land_${{ env.DEB_VERSION }}_${{ env.DEB_ARCH }}.deb
 
   windows-x64:
     name: windows (x64)
@@ -189,7 +310,6 @@ jobs:
           GDAL_BUILD="$PWD/gdal-build"
           GDAL_PREFIX="$PWD/gdal-min"
 
-          # Fail-safe patch: avoid the libopencad <cstdint> issue if CAD still compiles anywhere.
           CAD_FILE="$GDAL_SRC/ogr/ogrsf_frmts/cad/libopencad/dwg/r2000.cpp"
           if [ -f "$CAD_FILE" ]; then
             if ! grep -q "<cstdint>" "$CAD_FILE"; then
@@ -221,11 +341,6 @@ jobs:
 
           echo "GDAL_PREFIX=$GDAL_PREFIX" >> "$GITHUB_ENV"
 
-          echo "Installed binaries:"
-          ls -la "$GDAL_PREFIX/bin" || true
-          echo "Installed pkgconfig:"
-          ls -la "$GDAL_PREFIX/lib/pkgconfig" || true
-
           if [ ! -f "$GDAL_PREFIX/bin/ogrinfo.exe" ]; then
             echo "ERROR: ogrinfo.exe not produced by GDAL build"
             exit 1
@@ -253,37 +368,27 @@ jobs:
           rm -rf dist dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
           mkdir -p dist/share/dist2land dist/share/certs dist/share/gdal dist/share/proj
 
-          # App + plugin
           cp -f build/dist2land.exe dist/dist2land.exe
           cp -f build/dist2land_gdal.dll dist/dist2land_gdal.dll
 
-          # ogrinfo tool
           cp -f "$GDAL_PREFIX/bin/ogrinfo.exe" dist/ogrinfo.exe
-
-          # Minimal GDAL runtime (libgdal + any sibling DLLs installed into prefix/bin)
           cp -f "$GDAL_PREFIX/bin/"*.dll dist/ || true
 
-          # Providers config
           cp -f share/dist2land/providers.ini dist/share/dist2land/providers.ini
 
-          # Optional docs
           [ -f README.md ] && cp -f README.md dist/ || true
           [ -f LICENSE ] && cp -f LICENSE dist/ || true
 
-          # PROJ data (proj.db must be present)
           cp -r /mingw64/share/proj/* dist/ || true
           if [ ! -f dist/proj.db ]; then
             echo "ERROR: proj.db missing in dist/"
-            ls -la dist/ || true
             exit 1
           fi
 
-          # GDAL data from our minimal GDAL install, if present
           if [ -d "$GDAL_PREFIX/share/gdal" ]; then
             cp -r "$GDAL_PREFIX/share/gdal/"* dist/share/gdal/ || true
           fi
 
-          # CA bundle
           cp -f /mingw64/etc/ssl/certs/ca-bundle.crt dist/share/certs/ca-bundle.crt
 
           copy_deps_recursive () {
@@ -312,7 +417,6 @@ jobs:
             done
           }
 
-          # Seed recursion from app + plugin + ogrinfo + any libgdal in dist
           SEEDS=(dist/dist2land.exe dist/dist2land_gdal.dll dist/ogrinfo.exe)
           for f in dist/libgdal*.dll; do [ -f "$f" ] && SEEDS+=("$f"); done
           copy_deps_recursive "$GDAL_PREFIX" "${SEEDS[@]}"
@@ -344,9 +448,7 @@ jobs:
           cd unpack
           cmake -E tar xvf ../dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
-          # Realistic user run: no MSYS paths, rely on your win_runtime() to set native env.
           ./ogrinfo.exe --version
-
           ./dist2land.exe help
           ./dist2land.exe providers
 
@@ -363,7 +465,7 @@ jobs:
           path: dist2land-${{ env.ARTIFACT_TAG }}-windows-x64.zip
 
   publish:
-    name: publish to GitHub Release
+    name: publish to GitHub Release (+ APT repo)
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux-amd64, linux-arm64, windows-x64]
     runs-on: ubuntu-latest
@@ -373,10 +475,38 @@ jobs:
         with:
           path: release-assets
 
-      - name: Publish
+      - name: Build flat APT repository (Packages/Release)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+
+          rm -rf apt-repo
+          mkdir -p apt-repo
+
+          cp -v release-assets/linux-amd64/*.deb apt-repo/
+          cp -v release-assets/linux-arm64/*.deb apt-repo/
+
+          pushd apt-repo >/dev/null
+          dpkg-scanpackages --multiversion . /dev/null > Packages
+          gzip -9c Packages > Packages.gz
+          apt-ftparchive release . > Release
+          popd >/dev/null
+
+      - name: Publish versioned release (tag v*)
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release-assets/linux-amd64/*.tar.gz
             release-assets/linux-arm64/*.tar.gz
             release-assets/windows-x64/*.zip
+            apt-repo/*
+
+      - name: Publish/update stable APT release (tag "apt")
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apt
+          name: APT repository (stable)
+          target_commitish: ${{ github.sha }}
+          files: |
+            apt-repo/*
