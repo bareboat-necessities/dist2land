@@ -78,30 +78,30 @@ jobs:
           STAGE="pkgroot"
           INSTALL_ROOT="/usr/lib/${PKG}"
 
-          rm -rf "$STAGE"
+          rm -rf "$STAGE" debian
           install -d \
             "$STAGE/DEBIAN" \
             "$STAGE/usr/bin" \
             "$STAGE${INSTALL_ROOT}/share/dist2land" \
             "$STAGE/usr/share/doc/$PKG"
 
-          # Install the real binary under /usr/lib/dist2land/dist2land
+          # Real binary lives under /usr/lib/dist2land/dist2land
           install -m 0755 build/dist2land "$STAGE${INSTALL_ROOT}/${PKG}"
 
-          # Wrapper in /usr/bin that sets DIST2LAND_PROVIDERS by default
+          # /usr/bin wrapper sets default providers path
           cat > "$STAGE/usr/bin/$PKG" <<'EOF'
-          #!/bin/sh
-          set -e
-          : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
-          : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
-          export DIST2LAND_PROVIDERS
-          exec "$DIST2LAND_HOME/dist2land" "$@"
+            #!/bin/sh
+            set -e
+            : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
+            : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
+            export DIST2LAND_PROVIDERS
+            exec "$DIST2LAND_HOME/dist2land" "$@"
           EOF
-          # Strip the YAML indentation from heredoc body (so shebang is column 1)
-          sed -i 's/^          //' "$STAGE/usr/bin/$PKG"
+          # Remove the two-space YAML indentation we intentionally added
+          sed -i 's/^  //' "$STAGE/usr/bin/$PKG"
           chmod 0755 "$STAGE/usr/bin/$PKG"
 
-          # Providers config (adjacent to the real binary)
+          # Providers config next to the real binary
           install -m 0644 share/dist2land/providers.ini \
             "$STAGE${INSTALL_ROOT}/share/dist2land/providers.ini"
 
@@ -111,35 +111,44 @@ jobs:
 
           SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
-          # Preliminary control file (needed by dpkg-shlibdeps)
-          cat > "$STAGE/DEBIAN/control" <<EOF
-          Package: $PKG
-          Version: ${DEB_VERSION}
-          Section: utils
-          Priority: optional
-          Architecture: ${DEB_ARCH}
-          Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
-          Depends: \${shlibs:Depends}, \${misc:Depends}
-          Installed-Size: $SIZE_KB
-          Homepage: https://github.com/${GITHUB_REPOSITORY}
-          Description: dist2land command-line tool
-           Compute distance to land using provider datasets.
-          EOF
-          # Strip the YAML indentation so fields start at column 1
-          sed -i 's/^          //' "$STAGE/DEBIAN/control"
+          # dpkg-shlibdeps requires ./debian/control (source-style), so create a minimal one temporarily
+          mkdir -p debian
+          cat > debian/control <<EOF
+            Source: $PKG
+            Section: utils
+            Priority: optional
+            Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
+            Standards-Version: 4.6.2
 
-          # Compute shared-library deps using the staged control file (avoid ./debian/control)
-          DEPENDS="$(dpkg-shlibdeps -O -T"$STAGE/DEBIAN/control" \
-            -e "$STAGE${INSTALL_ROOT}/${PKG}" | sed -n 's/^shlibs:Depends=//p')"
+            Package: $PKG
+            Architecture: any
+            Depends: \${shlibs:Depends}, \${misc:Depends}
+            Description: dist2land command-line tool
+             Compute distance to land using provider datasets.
+          EOF
+          sed -i 's/^  //' debian/control
+
+          DEPENDS="$(dpkg-shlibdeps -O -p"$PKG" -e "$STAGE${INSTALL_ROOT}/${PKG}" \
+            | sed -n 's/^shlibs:Depends=//p')"
           [ -n "$DEPENDS" ] || DEPENDS="libc6"
 
-          # Rewrite Depends line cleanly
-          awk -v depends="$DEPENDS" '
-            BEGIN{done=0}
-            /^Depends: / && !done {print "Depends: " depends; done=1; next}
-            {print}
-          ' "$STAGE/DEBIAN/control" > "$STAGE/DEBIAN/control.new"
-          mv "$STAGE/DEBIAN/control.new" "$STAGE/DEBIAN/control"
+          rm -rf debian
+
+          # Final installed package control file
+          cat > "$STAGE/DEBIAN/control" <<EOF
+            Package: $PKG
+            Version: ${DEB_VERSION}
+            Section: utils
+            Priority: optional
+            Architecture: ${DEB_ARCH}
+            Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
+            Depends: $DEPENDS
+            Installed-Size: $SIZE_KB
+            Homepage: https://github.com/${GITHUB_REPOSITORY}
+            Description: dist2land command-line tool
+             Compute distance to land using provider datasets.
+          EOF
+          sed -i 's/^  //' "$STAGE/DEBIAN/control"
 
           fakeroot dpkg-deb --build "$STAGE" "dist2land_${DEB_VERSION}_${DEB_ARCH}.deb"
 
@@ -218,59 +227,77 @@ jobs:
           STAGE="pkgroot"
           INSTALL_ROOT="/usr/lib/${PKG}"
 
-          rm -rf "$STAGE"
+          rm -rf "$STAGE" debian
           install -d \
             "$STAGE/DEBIAN" \
             "$STAGE/usr/bin" \
             "$STAGE${INSTALL_ROOT}/share/dist2land" \
             "$STAGE/usr/share/doc/$PKG"
 
+          # Real binary lives under /usr/lib/dist2land/dist2land
           install -m 0755 build/dist2land "$STAGE${INSTALL_ROOT}/${PKG}"
 
+          # /usr/bin wrapper sets default providers path
           cat > "$STAGE/usr/bin/$PKG" <<'EOF'
-          #!/bin/sh
-          set -e
-          : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
-          : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
-          export DIST2LAND_PROVIDERS
-          exec "$DIST2LAND_HOME/dist2land" "$@"
+            #!/bin/sh
+            set -e
+            : "${DIST2LAND_HOME:=/usr/lib/dist2land}"
+            : "${DIST2LAND_PROVIDERS:=$DIST2LAND_HOME/share/dist2land/providers.ini}"
+            export DIST2LAND_PROVIDERS
+            exec "$DIST2LAND_HOME/dist2land" "$@"
           EOF
-          sed -i 's/^          //' "$STAGE/usr/bin/$PKG"
+          # Remove the two-space YAML indentation we intentionally added
+          sed -i 's/^  //' "$STAGE/usr/bin/$PKG"
           chmod 0755 "$STAGE/usr/bin/$PKG"
 
+          # Providers config next to the real binary
           install -m 0644 share/dist2land/providers.ini \
             "$STAGE${INSTALL_ROOT}/share/dist2land/providers.ini"
 
+          # Optional docs
           [ -f README.md ] && install -m 0644 README.md "$STAGE/usr/share/doc/$PKG/README.md" || true
           [ -f LICENSE ] && install -m 0644 LICENSE "$STAGE/usr/share/doc/$PKG/copyright" || true
 
           SIZE_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
-          cat > "$STAGE/DEBIAN/control" <<EOF
-          Package: $PKG
-          Version: ${DEB_VERSION}
-          Section: utils
-          Priority: optional
-          Architecture: ${DEB_ARCH}
-          Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
-          Depends: \${shlibs:Depends}, \${misc:Depends}
-          Installed-Size: $SIZE_KB
-          Homepage: https://github.com/${GITHUB_REPOSITORY}
-          Description: dist2land command-line tool
-           Compute distance to land using provider datasets.
-          EOF
-          sed -i 's/^          //' "$STAGE/DEBIAN/control"
+          # dpkg-shlibdeps requires ./debian/control (source-style), so create a minimal one temporarily
+          mkdir -p debian
+          cat > debian/control <<EOF
+            Source: $PKG
+            Section: utils
+            Priority: optional
+            Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
+            Standards-Version: 4.6.2
 
-          DEPENDS="$(dpkg-shlibdeps -O -T"$STAGE/DEBIAN/control" \
-            -e "$STAGE${INSTALL_ROOT}/${PKG}" | sed -n 's/^shlibs:Depends=//p')"
+            Package: $PKG
+            Architecture: any
+            Depends: \${shlibs:Depends}, \${misc:Depends}
+            Description: dist2land command-line tool
+             Compute distance to land using provider datasets.
+          EOF
+          sed -i 's/^  //' debian/control
+
+          DEPENDS="$(dpkg-shlibdeps -O -p"$PKG" -e "$STAGE${INSTALL_ROOT}/${PKG}" \
+            | sed -n 's/^shlibs:Depends=//p')"
           [ -n "$DEPENDS" ] || DEPENDS="libc6"
 
-          awk -v depends="$DEPENDS" '
-            BEGIN{done=0}
-            /^Depends: / && !done {print "Depends: " depends; done=1; next}
-            {print}
-          ' "$STAGE/DEBIAN/control" > "$STAGE/DEBIAN/control.new"
-          mv "$STAGE/DEBIAN/control.new" "$STAGE/DEBIAN/control"
+          rm -rf debian
+
+          # Final installed package control file
+          cat > "$STAGE/DEBIAN/control" <<EOF
+            Package: $PKG
+            Version: ${DEB_VERSION}
+            Section: utils
+            Priority: optional
+            Architecture: ${DEB_ARCH}
+            Maintainer: ${GITHUB_REPOSITORY} <noreply@github.com>
+            Depends: $DEPENDS
+            Installed-Size: $SIZE_KB
+            Homepage: https://github.com/${GITHUB_REPOSITORY}
+            Description: dist2land command-line tool
+             Compute distance to land using provider datasets.
+          EOF
+          sed -i 's/^  //' "$STAGE/DEBIAN/control"
 
           fakeroot dpkg-deb --build "$STAGE" "dist2land_${DEB_VERSION}_${DEB_ARCH}.deb"
 
