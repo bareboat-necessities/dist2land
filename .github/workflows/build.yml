@@ -445,8 +445,15 @@ jobs:
           rm -rf apt-repo openwrt-repo
           mkdir -p apt-repo
 
-          cp -v release-assets/linux-amd64/*.deb apt-repo/
-          cp -v release-assets/linux-arm64/*.deb apt-repo/
+          echo "Downloaded release assets:"
+          find release-assets -maxdepth 3 -type f -print | sort
+
+          mapfile -t deb_packages < <(find release-assets -mindepth 2 -maxdepth 2 -type f -name '*.deb' | sort)
+          if ((${#deb_packages[@]} == 0)); then
+            echo "ERROR: no Debian packages found under release-assets"
+            exit 1
+          fi
+          cp -v "${deb_packages[@]}" apt-repo/
 
           pushd apt-repo >/dev/null
           dpkg-scanpackages --multiversion . /dev/null > Packages
