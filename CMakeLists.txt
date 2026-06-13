@@ -8,6 +8,8 @@ find_package(CURL REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(PkgConfig REQUIRED)
 
+option(DIST2LAND_WITH_GDAL "Build distance backend with GDAL support" ON)
+
 add_executable(dist2land
   src/main.cpp
   src/app_paths.cpp
@@ -18,10 +20,14 @@ add_executable(dist2land
   src/win_runtime.cpp
 )
 
-if (WIN32)
-  target_sources(dist2land PRIVATE src/distance_call_win.cpp)
+if (DIST2LAND_WITH_GDAL)
+  if (WIN32)
+    target_sources(dist2land PRIVATE src/distance_call_win.cpp)
+  else()
+    target_sources(dist2land PRIVATE src/distance_call_posix.cpp src/ogr_distance.cpp)
+  endif()
 else()
-  target_sources(dist2land PRIVATE src/distance_call_posix.cpp src/ogr_distance.cpp)
+  target_sources(dist2land PRIVATE src/distance_call_unavailable.cpp)
 endif()
 
 target_include_directories(dist2land PRIVATE
@@ -48,57 +54,59 @@ add_custom_command(TARGET dist2land POST_BUILD
 )
 
 # --- GDAL linkage ---
-if (WIN32)
-  # Build plugin DLL that links to GDAL. dist2land.exe loads it on demand.
-  add_library(dist2land_gdal SHARED
-    src/dist2land_gdal_plugin.cpp
-    src/ogr_distance.cpp
-  )
-  target_include_directories(dist2land_gdal PRIVATE src)
+if (DIST2LAND_WITH_GDAL)
+  if (WIN32)
+    # Build plugin DLL that links to GDAL. dist2land.exe loads it on demand.
+    add_library(dist2land_gdal SHARED
+      src/dist2land_gdal_plugin.cpp
+      src/ogr_distance.cpp
+    )
+    target_include_directories(dist2land_gdal PRIVATE src)
 
-  # DO NOT use IMPORTED_TARGET on Windows: it injects /mingw64/include which native CMake treats as non-existent.
-  pkg_check_modules(GDAL REQUIRED gdal)
+    # DO NOT use IMPORTED_TARGET on Windows: it injects /mingw64/include which native CMake treats as non-existent.
+    pkg_check_modules(GDAL REQUIRED gdal)
 
-  function(msys_to_native out in)
-    if ("${in}" MATCHES "^/")
-      execute_process(COMMAND cygpath -m "${in}"
-                      OUTPUT_VARIABLE _p
-                      OUTPUT_STRIP_TRAILING_WHITESPACE)
-      set(${out} "${_p}" PARENT_SCOPE)
-    else()
-      set(${out} "${in}" PARENT_SCOPE)
-    endif()
-  endfunction()
+    function(msys_to_native out in)
+      if ("${in}" MATCHES "^/")
+        execute_process(COMMAND cygpath -m "${in}"
+                        OUTPUT_VARIABLE _p
+                        OUTPUT_STRIP_TRAILING_WHITESPACE)
+        set(${out} "${_p}" PARENT_SCOPE)
+      else()
+        set(${out} "${in}" PARENT_SCOPE)
+      endif()
+    endfunction()
 
-  set(GDAL_INCLUDE_DIRS_NATIVE "")
-  foreach(d IN LISTS GDAL_INCLUDE_DIRS)
-    msys_to_native(nd "${d}")
-    list(APPEND GDAL_INCLUDE_DIRS_NATIVE "${nd}")
-  endforeach()
+    set(GDAL_INCLUDE_DIRS_NATIVE "")
+    foreach(d IN LISTS GDAL_INCLUDE_DIRS)
+      msys_to_native(nd "${d}")
+      list(APPEND GDAL_INCLUDE_DIRS_NATIVE "${nd}")
+    endforeach()
 
-  set(GDAL_LIBRARY_DIRS_NATIVE "")
-  foreach(d IN LISTS GDAL_LIBRARY_DIRS)
-    msys_to_native(nd "${d}")
-    list(APPEND GDAL_LIBRARY_DIRS_NATIVE "${nd}")
-  endforeach()
+    set(GDAL_LIBRARY_DIRS_NATIVE "")
+    foreach(d IN LISTS GDAL_LIBRARY_DIRS)
+      msys_to_native(nd "${d}")
+      list(APPEND GDAL_LIBRARY_DIRS_NATIVE "${nd}")
+    endforeach()
 
-  target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
-  target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
+    target_include_directories(dist2land_gdal PRIVATE ${GDAL_INCLUDE_DIRS_NATIVE})
+    target_link_directories(dist2land_gdal PRIVATE ${GDAL_LIBRARY_DIRS_NATIVE})
 
-  # Link ONLY against gdal import lib; runtime deps are shipped next to the exe.
-  target_link_libraries(dist2land_gdal PRIVATE gdal)
+    # Link ONLY against gdal import lib; runtime deps are shipped next to the exe.
+    target_link_libraries(dist2land_gdal PRIVATE gdal)
 
-  # Force name: dist2land_gdal.dll (no "lib" prefix)
-  set_target_properties(dist2land_gdal PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal")
+    # Force name: dist2land_gdal.dll (no "lib" prefix)
+    set_target_properties(dist2land_gdal PROPERTIES PREFIX "" OUTPUT_NAME "dist2land_gdal")
 
-  # Place exe + plugin in build/ root (Ninja single-config).
-  set_target_properties(dist2land PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-  set_target_properties(dist2land_gdal PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-  )
-else()
-  pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
-  target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)
+    # Place exe + plugin in build/ root (Ninja single-config).
+    set_target_properties(dist2land PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    set_target_properties(dist2land_gdal PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+      ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+  else()
+    pkg_check_modules(GDAL REQUIRED IMPORTED_TARGET gdal)
+    target_link_libraries(dist2land PRIVATE PkgConfig::GDAL)
+  endif()
 endif()
