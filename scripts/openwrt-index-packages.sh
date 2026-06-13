@@ -26,12 +26,21 @@ fi
 extract_control() {
   local pkg="${1:?package path required}"
   local tmpdir="${2:?temporary directory required}"
+  local control_archive=""
 
   if ar t "${pkg}" >/dev/null 2>&1; then
-    (cd "${tmpdir}" && ar x "${pkg}" control.tar.gz)
-    tar -xzf "${tmpdir}/control.tar.gz" -C "${tmpdir}" ./control
-  elif tar -tzf "${pkg}" ./control >/dev/null 2>&1; then
-    tar -xzf "${pkg}" -C "${tmpdir}" ./control
+    control_archive="$(ar t "${pkg}" | awk '/^control\.tar(\.|$)/ { print; exit }')"
+    if [[ -z "${control_archive}" ]]; then
+      echo "OpenWrt package is missing a control archive: ${pkg}" >&2
+      return 1
+    fi
+    (cd "${tmpdir}" && ar x "${pkg}" "${control_archive}")
+    tar -xaf "${tmpdir}/${control_archive}" -C "${tmpdir}" ./control
+  elif tar -tf "${pkg}" ./control >/dev/null 2>&1; then
+    tar -xf "${pkg}" -C "${tmpdir}" ./control
+  elif control_archive="$(tar -tf "${pkg}" 2>/dev/null | awk '/^\.?\/?control\.tar(\.|$)/ { print; exit }')" && [[ -n "${control_archive}" ]]; then
+    tar -xf "${pkg}" -C "${tmpdir}" "${control_archive}"
+    tar -xaf "${tmpdir}/${control_archive#./}" -C "${tmpdir}" ./control
   else
     echo "Unsupported OpenWrt package archive format: ${pkg}" >&2
     return 1
