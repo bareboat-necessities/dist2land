@@ -81,3 +81,16 @@ Update + install
 sudo apt-get update
 sudo apt-get install dist2land
 ```
+
+## OpenWrt packages install via opkg
+
+Add the stable OpenWrt OPKG repository, then install `dist2land`:
+
+```sh
+echo 'src/gz dist2land https://github.com/bareboat-necessities/dist2land/releases/download/openwrt' \
+  >> /etc/opkg/customfeeds.conf
+opkg update
+opkg install dist2land
+```
+
+You can also download a target-specific `dist2land_*.ipk` from a versioned GitHub release and install it with `opkg install ./dist2land_*.ipk`.
