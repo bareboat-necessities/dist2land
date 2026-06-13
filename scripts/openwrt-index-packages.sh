@@ -23,6 +23,23 @@ if ! compgen -G "${OUTPUT_DIR}/*.ipk" >/dev/null && [[ "${LAYOUT}" == "flat" ]];
   exit 1
 fi
 
+extract_control() {
+  local pkg="${1:?package path required}"
+  local tmpdir="${2:?temporary directory required}"
+
+  if ar t "${pkg}" >/dev/null 2>&1; then
+    (cd "${tmpdir}" && ar x "${pkg}" control.tar.gz)
+    tar -xzf "${tmpdir}/control.tar.gz" -C "${tmpdir}" ./control
+  elif tar -tzf "${pkg}" ./control >/dev/null 2>&1; then
+    tar -xzf "${pkg}" -C "${tmpdir}" ./control
+  else
+    echo "Unsupported OpenWrt package archive format: ${pkg}" >&2
+    return 1
+  fi
+
+  cat "${tmpdir}/control"
+}
+
 (
   cd "${OUTPUT_DIR}"
   if command -v opkg-make-index >/dev/null 2>&1; then
@@ -31,7 +48,7 @@ fi
     for pkg in *.ipk; do
       [ -f "${pkg}" ] || continue
       tmpdir="$(mktemp -d)"
-      (cd "${tmpdir}" && ar x "${OLDPWD}/${pkg}" control.tar.gz && tar -xzf control.tar.gz ./control && cat control)
+      extract_control "${PWD}/${pkg}" "${tmpdir}"
       rm -rf "${tmpdir}"
       echo "Filename: ${pkg}"
       echo "Size: $(stat -c%s "${pkg}")"
