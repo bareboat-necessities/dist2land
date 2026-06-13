@@ -429,12 +429,12 @@ jobs:
     needs: [linux, windows-x64, openwrt-package]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-assets
-
-      - uses: actions/checkout@v4
 
       - name: Build flat APT and OpenWrt OPKG repositories
         run: |
