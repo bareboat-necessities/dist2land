@@ -47,7 +47,6 @@ PKG_NAME:=dist2land
 PKG_VERSION:=${OPENWRT_PACKAGE_VERSION}
 PKG_RELEASE:=${OPENWRT_PACKAGE_RELEASE}
 PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_NAME)-\$(PKG_VERSION)
-PKG_BUILD_DEPENDS:=gdal
 
 include \$(INCLUDE_DIR)/package.mk
 include \$(INCLUDE_DIR)/cmake.mk
@@ -57,7 +56,7 @@ define Package/dist2land
   CATEGORY:=Utilities
   TITLE:=Distance-to-land command-line tool
   URL:=${REPO_URL}
-  DEPENDS:=+libstdcpp +libcurl +libarchive +libgdal
+  DEPENDS:=+libstdcpp +libcurl +libarchive
 endef
 
 define Package/dist2land/description
@@ -69,7 +68,7 @@ define Build/Prepare
 	\$(CP) ${PACKAGE_DIR}/src/. \$(PKG_BUILD_DIR)/
 endef
 
-CMAKE_OPTIONS += -DCMAKE_BUILD_TYPE=Release
+CMAKE_OPTIONS += -DCMAKE_BUILD_TYPE=Release -DDIST2LAND_WITH_GDAL=OFF
 
 define Package/dist2land/install
 	\$(INSTALL_DIR) \$(1)/usr/bin
@@ -83,7 +82,7 @@ EOF_MAKE
 
 pushd "${SDK_DIR}" >/dev/null
 ./scripts/feeds update -a
-./scripts/feeds install libcurl libarchive gdal || ./scripts/feeds install -a
+./scripts/feeds install libcurl libarchive
 popd >/dev/null
 
 make -C "${SDK_DIR}" defconfig
