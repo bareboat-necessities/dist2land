@@ -44,6 +44,16 @@ if (MSVC)
   target_compile_definitions(dist2land PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+include(GNUInstallDirs)
+
+install(TARGETS dist2land
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES "${CMAKE_SOURCE_DIR}/share/dist2land/providers.ini"
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/dist2land
+)
+
 # Copy providers.ini into build output so CI running from ./build works.
 add_custom_command(TARGET dist2land POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dist2land>/share/dist2land"
